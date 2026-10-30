@@ -7,10 +7,10 @@
   "type": "module",
   "packageManager": "bun@1.4.3",
   "bin": {
-    "atxf": "packages/atxf/src/cli.ts"
+    "atxf": "packages/atxf-ts/src/cli.ts"
   },
   "scripts": {
-    "validate": "bun packages/atxf/src/cli.ts validate examples/*.atxf.jsonl",
+    "validate": "bun packages/atxf-ts/src/cli.ts validate examples/*.atxf.jsonl",
     "test": "bun test",
     "check": "tsc --noEmit && bun test"
   },

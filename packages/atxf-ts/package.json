@@ -4,7 +4,7 @@
   "description": "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation",
   "license": "MIT",
   "author": "Leo Ostera",
-  "repository": { "type": "git", "url": "git+https://github.com/leostera/atxf.git", "directory": "packages/atxf" },
+  "repository": { "type": "git", "url": "git+https://github.com/leostera/atxf.git", "directory": "packages/atxf-ts" },
   "homepage": "https://atxf.leostera.dev",
   "type": "module",
   "exports": {
