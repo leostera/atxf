@@ -49,10 +49,17 @@ ATXF aims to be general enough to hold any of these formats without losing their
 ## Use it
 
 ```sh
+bunx @leostera/atxf validate path/to/session.atxf.jsonl
+bunx @leostera/atxf convert --from pi --to codex session.jsonl > rollout.jsonl
+bunx @leostera/atxf reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
+```
+
+In this repository, `bun run atxf` runs the same CLI from source:
+
+```sh
 bun install
-bun packages/atxf-ts/src/cli.ts validate path/to/session.atxf.jsonl
-bun packages/atxf-ts/src/cli.ts convert --from pi --to codex session.jsonl > rollout.jsonl
-bun packages/atxf-ts/src/cli.ts reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
+bun run atxf validate path/to/session.atxf.jsonl
+bun run atxf convert --from pi --to codex session.jsonl > rollout.jsonl
 bun run check   # typecheck and tests
 ```
 

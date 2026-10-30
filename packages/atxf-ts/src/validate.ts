@@ -2,7 +2,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { verifyIntegrity } from "./integrity.ts";
 import { TREE_TYPES, type EntryRecord, type TranscriptHeader } from "./types.ts";
-import schema from "../../../schema/v0.1/atxf.schema.json" with { type: "json" };
+import schema from "../schema/v0.1/atxf.schema.json" with { type: "json" };
 
 export type Severity = "error" | "warning";
 

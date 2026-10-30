@@ -4,9 +4,23 @@
   "description": "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation",
   "license": "MIT",
   "author": "Leo Ostera",
-  "repository": { "type": "git", "url": "git+https://github.com/leostera/atxf.git", "directory": "packages/atxf-ts" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leostera/atxf.git",
+    "directory": "packages/atxf-ts"
+  },
   "homepage": "https://atxf.leostera.dev",
   "type": "module",
+  "files": [
+    "src",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "rm schema LICENSE && cp -R ../../schema schema && cp ../../LICENSE LICENSE",
+    "postpack": "rm -rf schema LICENSE && ln -s ../../schema schema && ln -s ../../LICENSE LICENSE"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./formats": "./src/formats/index.ts",
@@ -30,6 +44,8 @@
     "fast-check": "^4.10.2"
   },
   "peerDependenciesMeta": {
-    "fast-check": { "optional": true }
+    "fast-check": {
+      "optional": true
+    }
   }
 }

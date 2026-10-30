@@ -6,11 +6,9 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.4.3",
-  "bin": {
-    "atxf": "packages/atxf-ts/src/cli.ts"
-  },
   "scripts": {
-    "validate": "bun packages/atxf-ts/src/cli.ts validate examples/*.atxf.jsonl",
+    "atxf": "bun packages/atxf-ts/src/cli.ts",
+    "validate": "bun run atxf validate examples/*.atxf.jsonl",
     "test": "bun test",
     "check": "tsc --noEmit && bun test"
   },
