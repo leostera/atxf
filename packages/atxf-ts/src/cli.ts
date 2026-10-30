@@ -14,11 +14,8 @@ agents: ${Object.keys(formats).join(", ")}`;
 const [command, ...args] = process.argv.slice(2);
 const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand };
 const run = command === undefined ? undefined : commands[command];
-if (run === undefined) {
-  console.error(USAGE);
-  process.exit(2);
-}
-process.exit(await run(args));
+// Set the exit code rather than calling `process.exit`, which would cut off output still being written to a pipe.
+process.exitCode = run === undefined ? usage() : await run(args);
 
 async function validate(files: string[]): Promise<number> {
   if (files.length === 0) return usage();

@@ -6,21 +6,19 @@ import { createHash } from "node:crypto";
  * as JSON has no such value. Non-finite numbers are rejected, as JCS requires.
  */
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
-}
-
-function sortKeys(value: unknown): unknown {
+  // Written out rather than `JSON.stringify` of a key-sorted copy: objects list integer-like keys such as "10" first,
+  // whatever order they were inserted in, which is not JCS order.
   if (typeof value === "number" && !Number.isFinite(value)) throw new Error(`canonical JSON cannot encode ${value}`);
-  if (Array.isArray(value)) return value.map(sortKeys);
+  if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonicalJson(item))).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
-        .sort()
-        .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
-    );
+    const record = value as Record<string, unknown>;
+    const fields = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+    return `{${fields.join(",")}}`;
   }
-  return value;
+  return JSON.stringify(value);
 }
 
 export function sha256(text: string): string {

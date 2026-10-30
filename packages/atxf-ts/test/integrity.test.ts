@@ -25,6 +25,10 @@ describe("canonical JSON", () => {
   test("sorts keys recursively and drops undefined, so key order does not change a hash", () => {
     expect(canonicalJson({ b: 1, a: [1.0, "é", { d: undefined, c: null }] })).toBe('{"a":[1,"é",{"c":null}],"b":1}');
   });
+
+  test("orders integer-like keys as strings, though objects list them first", () => {
+    expect(canonicalJson({ b: 1, "4": null, "": "", a: [{ z: 1, "10": 2 }] })).toBe('{"":"","4":null,"a":[{"10":2,"z":1}],"b":1}');
+  });
 });
 
 describe("hashing", () => {
