@@ -7,3 +7,6 @@ export * from "./canonical.ts";
 export * from "./equivalence.ts";
 export * from "./integrity.ts";
 export { validateTranscript, type Diagnostic, type Severity, type ValidationResult } from "./validate.ts";
+export * from "./native.ts";
+export * from "./codec.ts";
+export * from "./decode-helpers.ts";

@@ -6,7 +6,9 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts",
+    "./laws": "./src/laws.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

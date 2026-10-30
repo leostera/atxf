@@ -3,19 +3,22 @@ import type { AtxfRecord, EntryRecord, Transcript } from "./types.ts";
 /**
  * A converter between one agent's native session format and ATXF.
  *
- * `fromAtxf(toAtxf(x))` reproduces `x` exactly when the transcript still carries the agent's native records
- * (SPEC §11). Records without them, from another agent or added later, are synthesized from their ATXF meaning,
- * which is lossy where the formats differ; each converter documents how.
+ * Both directions are lossless (SPEC §11): `fromAtxf(toAtxf(x))` reproduces `x` byte for byte, and
+ * `toAtxf(fromAtxf(t))` returns `t` for any transcript, because a file written for another agent's transcript
+ * carries that transcript along. See `defineConverter`.
  */
 export interface Converter {
   /** The agent name used in `source.agent` and `native.source`, e.g. `pi`. */
   agent: string;
   /** The native format identifier, e.g. `pi/session-jsonl`. */
   format: string;
-  /** Parses native session text into a transcript. */
-  toAtxf(text: string): Transcript;
-  /** Writes a transcript as native session text. */
-  fromAtxf(transcript: Transcript): string;
+  /** Parses native session text into a transcript. Records are hashed (SPEC §17) unless `integrity` is false. */
+  toAtxf(text: string, options?: { integrity?: boolean }): Transcript;
+  /**
+   * Writes a transcript as native session text. With `carry: false`, writes only the agent's own records for the
+   * active context, without marks or the carried transcript: a clean file that no longer round-trips.
+   */
+  fromAtxf(transcript: Transcript, options?: { carry?: boolean }): string;
 }
 
 /** A copy of the transcript without native passthrough, as if it came from another agent. */

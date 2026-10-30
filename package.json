@@ -16,7 +16,14 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
-    "typescript": "^7.0.2"
+    "fast-check": "^4.10.2",
+    "typescript": "^7.0.2",
+    "@atxf/core": "workspace:*",
+    "@atxf/pi": "workspace:*",
+    "@atxf/claude-code": "workspace:*",
+    "@atxf/codex": "workspace:*",
+    "@atxf/opencode": "workspace:*",
+    "@atxf/gemini-cli": "workspace:*"
   },
   "workspaces": [
     "packages/*",

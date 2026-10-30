@@ -1,0 +1,11 @@
+{"sessionId":"5b0c2f7e-1d9a-4c3e-9f00-2a7d6e8b1c44","projectHash":"9f2c1e","startTime":"2026-10-29T12:00:00.000Z","lastUpdated":"2026-10-29T12:03:00.000Z","kind":"main"}
+{"id":"m1","timestamp":"2026-10-29T12:00:01.000Z","type":"user","content":[{"text":"What is in package.json?"}]}
+{"id":"m2","timestamp":"2026-10-29T12:00:03.000Z","type":"gemini","content":"","thoughts":[{"subject":"Reading the manifest","description":"I'll read package.json.","timestamp":"2026-10-29T12:00:02.000Z"}],"toolCalls":[{"id":"read_file-1","name":"read_file","args":{"absolute_path":"/work/package.json"},"result":[{"functionResponse":{"id":"read_file-1","name":"read_file","response":{"output":"{\"name\":\"demo\"}"}}}],"status":"success","timestamp":"2026-10-29T12:00:03.500Z","displayName":"ReadFile","renderOutputAsMarkdown":true}],"tokens":{"input":2100,"output":40,"cached":1024,"thoughts":20,"tool":0,"total":2160},"model":"gemini-3-pro"}
+{"id":"m3","timestamp":"2026-10-29T12:00:05.000Z","type":"gemini","content":"The package is named demo.","tokens":{"input":2200,"output":12,"cached":2048,"total":2212},"model":"gemini-3-pro"}
+{"$set":{"summary":"Inspect package.json","lastUpdated":"2026-10-29T12:00:05.000Z"}}
+{"id":"m4","timestamp":"2026-10-29T12:01:00.000Z","type":"info","content":"Switched to gemini-3-flash."}
+{"id":"m5","timestamp":"2026-10-29T12:01:10.000Z","type":"user","content":"And the version?"}
+{"$rewindTo":"m5"}
+{"id":"m6","timestamp":"2026-10-29T12:02:00.000Z","type":"user","content":"List the dependencies instead."}
+{"$patch":{"id":"m6","content":"List the dev dependencies instead."}}
+{"id":"m7","timestamp":"2026-10-29T12:02:05.000Z","type":"error","content":"Quota exceeded; retrying."}

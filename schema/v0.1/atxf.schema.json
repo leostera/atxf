@@ -56,7 +56,16 @@
         "source": { "description": "Producing agent, e.g. `pi`, `claude-code`, `codex`, `opencode`, `gemini-cli`.", "type": "string", "minLength": 1 },
         "format": { "description": "Source format identifier, e.g. `codex/rollout-jsonl`.", "type": "string" },
         "version": { "description": "Source agent or format version.", "type": "string" },
-        "records": { "type": "array", "minItems": 1 }
+        "records": { "description": "Empty only together with `of`.", "type": "array" },
+        "of": {
+          "description": "This record was derived from the same source records as the earlier record `of`, which carries them. One source record that becomes several ATXF records (e.g. a message holding several tool results) carries its records once.",
+          "$ref": "#/$defs/id"
+        },
+        "raw": {
+          "description": "The exact source text of each record, including its line terminator, when re-serializing `records` would not reproduce it byte for byte. Same length as `records`.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
       },
       "required": ["source", "records"],
       "additionalProperties": false

@@ -1,0 +1,14 @@
+{
+  "name": "@atxf/codex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lossless converter between Codex rollout files and ATXF",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@atxf/core": "workspace:*"
+  }
+}

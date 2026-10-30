@@ -43,6 +43,10 @@ export interface Native {
   format?: string;
   version?: string;
   records: unknown[];
+  /** Exact source text per record, when `JSON.stringify` of `records` would not reproduce it. */
+  raw?: string[];
+  /** Set on a record derived from the same source records as the earlier record `of`; then `records` is empty. */
+  of?: string;
 }
 
 export type Ext = Record<string, unknown>;
