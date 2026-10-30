@@ -15,13 +15,13 @@ bun run --cwd sites/atxf.leostera.dev build   # static site in dist/
 
 ## Deploy
 
-Deployment is manual. [`wrangler.jsonc`](wrangler.jsonc) serves `dist/` through Workers Static Assets, with no Worker script, `workers_dev` off and the custom domain `atxf.leostera.dev`. The `leostera.dev` zone must be in the same account.
+Deployment is manual, with the [`cf`](https://developers.cloudflare.com/cf/) CLI. [`cloudflare.config.ts`](cloudflare.config.ts) defines the Worker: `workers.dev` and preview URLs are off, and it serves the custom domain `atxf.leostera.dev`. The `leostera.dev` zone must be in the same account. The `@astrojs/cloudflare` adapter writes the Build Output that `cf` deploys. Every page is prerendered, so the Worker serves static assets only and has no other bindings.
+
+`cf` loads `cloudflare.config.ts` under Node, not Bun, so run it with `npx`:
 
 ```sh
 cd sites/atxf.leostera.dev
-bunx wrangler login             # with the personal Cloudflare account
-bunx wrangler whoami            # verify the account before deploying
-bun run build
-bunx wrangler deploy --dry-run
-bunx wrangler deploy
+npx cf auth login               # with the personal Cloudflare account
+npx cf deploy --dry-run         # builds and validates; no upload
+npx cf deploy
 ```
