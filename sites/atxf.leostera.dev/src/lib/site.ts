@@ -27,7 +27,7 @@ export interface Example {
 }
 
 // Simplest first; a sub-agent child follows its parent.
-const EXAMPLE_ORDER = ["minimal", "branching", "codex-style", "revert-and-subagent", "subagent-child"];
+const EXAMPLE_ORDER = ["minimal", "branching", "codex-style", "revert-and-subagent", "subagent-child", "sealed"];
 const order = (file: string) => {
   const index = EXAMPLE_ORDER.indexOf(file.replace(/\.atxf\.jsonl$/, ""));
   return index === -1 ? EXAMPLE_ORDER.length : index;

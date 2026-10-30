@@ -14,6 +14,8 @@ const DESCRIPTIONS: Record<string, string> = {
   "revert-and-subagent":
     "An OpenCode-style session: file checkpoints, a sub-agent spawn and result, and a revert that restores files.",
   "subagent-child": "The sub-agent transcript spawned by the previous example, linked back through its header.",
+  sealed:
+    "The branching example with integrity declared: every record carries a hash, and a closing seal commits to all of them.",
 };
 
 const files = examples();
@@ -23,7 +25,7 @@ const rendered = files.map((example) => ({
   description: DESCRIPTIONS[example.slug] ?? "",
   html: highlighter.highlight(example.text.trimEnd(), "json"),
 }));
-const validateHtml = highlighter.highlight("bun install\nbun src/cli.ts examples/*.atxf.jsonl", "bash");
+const validateHtml = highlighter.highlight("bun install\nbun run validate", "bash");
 highlighter.dispose();
 
 const toc = rendered.map((example) => ({ slug: example.slug, text: example.file }));

@@ -152,7 +152,7 @@ A `leaf` with `restoreCheckpointId` states that files were restored to that chec
 
 ## 15. Fidelity
 
-The header's `fidelity` declares what the producer could capture: topology, instructions, tools, reasoning, tool lifecycle, turns, usage, native coverage. Consumers SHOULD treat absent information as unknown, not empty. For example, with `fidelity.instructions: "none"`, a missing `context` record does not mean the system prompt was empty.
+The header's `fidelity` declares what the producer could capture: topology, instructions, tools, reasoning, tool lifecycle, turns, usage, native coverage, and whether ids are `stable` (taken from the source, so they match across copies of the same session) or `synthetic` (made up by the converter). Consumers SHOULD treat absent information as unknown, not empty. For example, with `fidelity.instructions: "none"`, a missing `context` record does not mean the system prompt was empty.
 
 ## 16. Extensibility and versioning
 
@@ -163,6 +163,49 @@ The header's `fidelity` declares what the producer could capture: topology, inst
 - New record types require a new format version. The header's `atxf` field names it.
 - Minor versions only add optional fields and record types. Consumers SHOULD process a newer minor version, skipping records that fail validation.
 
-## 17. Privacy
+## 17. Integrity
+
+Record hashes make a transcript tamper-evident and let a reader prove that a record belongs to it without reading the rest. They work like Git commits: each record's hash commits to its own content and to the hashes of the records it references, so it covers everything the record depends on.
+
+A header that declares `"integrity": {"alg": "sha256", "canon": "jcs"}` MUST carry `hash`, and so MUST every other record. Without `integrity`, hashes are optional, consumers do not check them, and `seal` records are invalid.
+
+### 17.1 Computing hashes
+
+- `JCS(v)` is the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON of `v`, as UTF-8.
+- `D(tag, bytes)` is `"sha256:"` followed by the lowercase hex SHA-256 of `"atxf/0.1/" + tag + "\n"` and then `bytes`. The tag separates the kinds of hash, so a hash of one kind cannot pass for another.
+- The **header hash** is `D("transcript", JCS(header without "hash"))`.
+- A record's **content digest** is `D("content", JCS(record without "hash"))`. It covers every field, including `time`, `native` and `ext`.
+- A record's **hash** is `D("record", JCS({transcript, content, refs}))`, where:
+  - `transcript` is the header hash. It ties the record to this transcript.
+  - `content` is the record's content digest.
+  - `refs` has one entry for each reference field the record has (`parentId`, `targetId`, `fromId`, `firstKeptId`, `restoreCheckpointId`). Each entry is the hash of the referenced record, or `null` for a null reference.
+
+References always point to earlier records (§3), so a writer can hash each record as it appends it.
+
+Hashes vouch for content, not identity. Two converters, or two versions of one converter, can produce different hashes for the same source session, because `native`, timestamps and field choices differ. Ids identify records (§3). When two copies of a transcript have a record with the same id, equal hashes mean the record and everything it depends on are identical. Different hashes mean the copies conflict there.
+
+### 17.2 Seals
+
+Record hashes cannot detect a missing record that nothing references, such as a deleted branch tip. They also do not cover file order, which decides the active leaf (§4) and which label applies. A `seal` record covers both, for every record before it:
+
+- `count`: the number of records before the seal, excluding the header.
+- `chain`: a hash chain over those records in file order. It starts as the header hash, and each record folds in as `chain = D("chain", previousChain + "\n" + recordHash)`. Earlier seals are included.
+- `heads`: the hashes of the records before the seal that no other record before it references, sorted. Seals are left out. Every record is reachable from a head by following references, so the heads cover the whole tree. Unlike `chain`, `heads` do not depend on file order, so two copies holding the same records have the same heads.
+
+A seal has a hash of its own (with empty `refs`) and is not part of the tree. A writer MAY append seals at any point, for example at the end of each turn or upload.
+
+Anyone can recompute a seal, so it shows the transcript is complete and unchanged, not who wrote it. Signing seals, to prove who vouches for a transcript, is left to a later version.
+
+### 17.3 Inclusion proofs
+
+To prove that a record is covered by a seal, send the record and, for each record from it to one of the seal's `heads`, the `{transcript, content, refs}` input of that record's hash. The verifier:
+
+1. checks that the first input's `content` is the digest of the record,
+2. recomputes each hash, checking that each input's `refs` contains the previous hash,
+3. checks that the last hash is the head.
+
+The proof carries only digests of the other records on the path, not their content.
+
+## 18. Privacy
 
 Transcripts routinely contain source code, credentials pasted by users, file paths and personal data. Producers SHOULD offer redaction before export. `native` and `replay` can contain the same sensitive material in less visible form.

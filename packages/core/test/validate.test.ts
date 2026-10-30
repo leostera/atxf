@@ -27,9 +27,9 @@ const errors = (...records: unknown[]) =>
     .map((d) => d.message);
 
 describe("examples", () => {
-  for (const file of readdirSync(new URL("../examples", import.meta.url))) {
+  for (const file of readdirSync(new URL("../../../examples", import.meta.url))) {
     test(file, async () => {
-      const result = validateTranscript(await Bun.file(new URL(`../examples/${file}`, import.meta.url)).text());
+      const result = validateTranscript(await Bun.file(new URL(`../../../examples/${file}`, import.meta.url)).text());
       expect(result.diagnostics).toEqual([]);
     });
   }

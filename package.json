@@ -7,20 +7,19 @@
   "type": "module",
   "packageManager": "bun@1.4.3",
   "bin": {
-    "atxf-validate": "src/cli.ts"
+    "atxf-validate": "packages/core/src/cli.ts"
   },
   "scripts": {
-    "validate": "bun src/cli.ts examples/*.atxf.jsonl",
+    "validate": "bun packages/core/src/cli.ts examples/*.atxf.jsonl",
     "test": "bun test",
     "check": "tsc --noEmit && bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
     "typescript": "^7.0.2"
   },
   "workspaces": [
+    "packages/*",
     "sites/*"
   ]
 }

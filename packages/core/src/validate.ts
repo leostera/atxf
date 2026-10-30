@@ -1,6 +1,8 @@
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import schema from "../schema/v0.1/atxf.schema.json" with { type: "json" };
+import { verifyIntegrity } from "./integrity.ts";
+import { TREE_TYPES, type EntryRecord, type TranscriptHeader } from "./types.ts";
+import schema from "../../../schema/v0.1/atxf.schema.json" with { type: "json" };
 
 export type Severity = "error" | "warning";
 
@@ -22,20 +24,6 @@ const ajv = new Ajv2020({ allErrors: false, strict: false });
 addFormats(ajv);
 const validateRecord = ajv.compile(schema);
 
-const TREE_TYPES = new Set([
-  "message",
-  "context",
-  "settings",
-  "compaction",
-  "context_edit",
-  "branch_summary",
-  "turn",
-  "tool_status",
-  "usage",
-  "checkpoint",
-  "agent_link",
-  "custom",
-]);
 
 /**
  * Validates one ATXF transcript (JSONL text): each line against the JSON Schema, then the
@@ -63,7 +51,28 @@ export function validateTranscript(text: string): ValidationResult {
   if (diagnostics.length > 0) return finish(diagnostics);
 
   checkReferences(records, error, warn);
+  if (diagnostics.some((d) => d.severity === "error")) return finish(diagnostics);
+  checkIntegrity(records, error, warn);
   return finish(diagnostics);
+}
+
+/** Hashes and seals (SPEC.md, Integrity). Runs only on a structurally valid transcript. */
+function checkIntegrity(
+  records: { line: number; record: JsonRecord }[],
+  error: (line: number, message: string) => void,
+  warn: (line: number, message: string) => void,
+) {
+  const [header, ...rest] = records;
+  if (!(header!.record as { integrity?: unknown }).integrity) {
+    for (const { line, record } of rest) {
+      if (record.hash !== undefined) warn(line, "record has a `hash` but the header does not declare `integrity`; it is not checked");
+    }
+  }
+  const problems = verifyIntegrity({
+    header: header!.record as unknown as TranscriptHeader,
+    records: rest.map(({ record }) => record as unknown as EntryRecord),
+  });
+  for (const { index, message } of problems) error(index === -1 ? header!.line : rest[index]!.line, `integrity: ${message}`);
 }
 
 function parseLines(text: string, error: (line: number, message: string) => void) {
@@ -155,6 +164,8 @@ function checkReferences(
         break;
       case "label":
         requireNode(line, "targetId", record.targetId);
+        break;
+      case "seal":
         break;
     }
   }

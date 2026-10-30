@@ -22,7 +22,8 @@
         { "$ref": "#/$defs/customRecord" },
         { "$ref": "#/$defs/leafRecord" },
         { "$ref": "#/$defs/labelRecord" },
-        { "$ref": "#/$defs/metadataRecord" }
+        { "$ref": "#/$defs/metadataRecord" },
+        { "$ref": "#/$defs/sealRecord" }
       ]
     },
 
@@ -37,6 +38,11 @@
       "format": "date-time"
     },
     "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "hash": {
+      "description": "A record hash: `sha256:` followed by 64 lowercase hex digits. See SPEC.md, Integrity.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
 
     "ext": {
       "description": "Namespaced extension data that is not part of the core format. Keys are namespaces (e.g. an agent name); values are opaque.",
@@ -343,7 +349,8 @@
         "parentId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "time": { "$ref": "#/$defs/timestamp" },
         "native": { "$ref": "#/$defs/native" },
-        "ext": { "$ref": "#/$defs/ext" }
+        "ext": { "$ref": "#/$defs/ext" },
+        "hash": { "$ref": "#/$defs/hash" }
       },
       "required": ["type", "id", "parentId", "time"]
     },
@@ -354,7 +361,8 @@
         "id": { "$ref": "#/$defs/id" },
         "time": { "$ref": "#/$defs/timestamp" },
         "native": { "$ref": "#/$defs/native" },
-        "ext": { "$ref": "#/$defs/ext" }
+        "ext": { "$ref": "#/$defs/ext" },
+        "hash": { "$ref": "#/$defs/hash" }
       },
       "required": ["type", "id", "time"]
     },
@@ -411,12 +419,27 @@
             "toolLifecycle": { "type": "boolean" },
             "turns": { "type": "boolean" },
             "usage": { "enum": ["per-response", "aggregate", "none"] },
-            "native": { "enum": ["all", "partial", "none"] }
+            "native": { "enum": ["all", "partial", "none"] },
+            "ids": {
+              "description": "`stable`: ids come from the source and match across copies of the session. `synthetic`: the converter made them up.",
+              "enum": ["stable", "synthetic"]
+            }
           },
           "additionalProperties": false
         },
+        "integrity": {
+          "description": "Declares that every record carries a `hash`. See SPEC.md, Integrity.",
+          "type": "object",
+          "properties": {
+            "alg": { "const": "sha256" },
+            "canon": { "const": "jcs" }
+          },
+          "required": ["alg", "canon"],
+          "additionalProperties": false
+        },
         "native": { "$ref": "#/$defs/native" },
-        "ext": { "$ref": "#/$defs/ext" }
+        "ext": { "$ref": "#/$defs/ext" },
+        "hash": { "$ref": "#/$defs/hash" }
       },
       "required": ["type", "atxf", "id", "time", "source"],
       "additionalProperties": false
@@ -737,6 +760,36 @@
             "tags": { "type": "array", "items": { "type": "string" } }
           },
           "anyOf": [{ "required": ["title"] }, { "required": ["archived"] }, { "required": ["tags"] }]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "sealRecord": {
+      "title": "seal",
+      "description": "Commits to every record before it: how many there are, their hashes in file order, and the hashes that no other record references. Requires `integrity` in the header.",
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/annotation" },
+        {
+          "properties": {
+            "type": { "const": "seal" },
+            "count": {
+              "description": "Number of records before the seal, excluding the header.",
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "chain": {
+              "description": "Hash chain over the hashes of those records, in file order.",
+              "$ref": "#/$defs/hash"
+            },
+            "heads": {
+              "description": "Hashes of the records before the seal that no other record references, sorted.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/hash" },
+              "uniqueItems": true
+            }
+          },
+          "required": ["count", "chain", "heads"]
         }
       ],
       "unevaluatedProperties": false

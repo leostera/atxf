@@ -6,9 +6,18 @@
       "name": "agent-transcript-exchange-format",
       "devDependencies": {
         "@types/bun": "^1.4.4",
-        "ajv": "^8.20.0",
-        "ajv-formats": "^3.0.1",
         "typescript": "^7.0.2",
+      },
+    },
+    "packages/core": {
+      "name": "@atxf/core",
+      "version": "0.1.0",
+      "bin": {
+        "atxf-validate": "./src/cli.ts",
+      },
+      "dependencies": {
+        "ajv": "^8.17.1",
+        "ajv-formats": "^3.0.1",
       },
     },
     "sites/atxf.leostera.dev": {
@@ -78,6 +87,8 @@
     "@astrojs/underscore-redirects": ["@astrojs/underscore-redirects@1.0.4", "", {}, "sha512-sD3bn7i2yC+ocxlhCTshdg3gUM471Nag3wgyHilA+kpmufokvmUu1p5Mw5GT5Xp8SPC1Nlq0BJAgV/lslnWvRw=="],
 
     "@astrojs/yaml2ts": ["@astrojs/yaml2ts@0.2.4", "", { "dependencies": { "yaml": "^2.8.3" } }, "sha512-8oddpOae35pJsXPQXhTkM0ypfKPskVsh2bCxRtbf7e+/Epw2nReakFYpLKjZMEr75CsoF203PMnCocpfz0s69A=="],
+
+    "@atxf/core": ["@atxf/core@workspace:packages/core"],
 
     "@atxf/www": ["@atxf/www@workspace:sites/atxf.leostera.dev"],
 

@@ -24,6 +24,7 @@ ATXF aims to be general enough to hold any of these formats without losing their
 - **Opaque replay data** (thinking signatures, encrypted reasoning) travels in `replay`. It is passed back only to the provider that produced it.
 - **Lossless escape hatch.** `native` carries the verbatim source records; `ext` and `custom` carry namespaced extras.
 - **Fidelity is declared, not guessed.** The header says what the producer could capture: topology, instructions, reasoning, and so on.
+- **Tamper-evident, like Git.** With `integrity` declared, each record's hash commits to its content and to the hashes of the records it references. `seal` records commit to the whole file, and a record can be proven to belong to a transcript from digests alone.
 
 ```jsonl
 {"type":"transcript","atxf":"0.1","id":"t1","time":"2026-10-29T12:00:00Z","source":{"agent":"pi"}}
@@ -40,20 +41,22 @@ ATXF aims to be general enough to hold any of these formats without losing their
 | [`schema/v0.1/atxf.schema.json`](schema/v0.1/atxf.schema.json) | JSON Schema (draft 2020-12) for one record (one line) |
 | [`docs/mappings.md`](docs/mappings.md) | How Pi, Codex, Claude Code, OpenCode, Gemini CLI and ATIF map onto ATXF |
 | [`examples/`](examples) | Example transcripts in the style of each source |
-| [`src/validate.ts`](src/validate.ts) | Reference validator: schema plus cross-record invariants |
+| [`packages/core/`](packages/core) | `@atxf/core`: types, validator (schema, cross-record invariants, hashes and seals), tree and context utilities |
 | [`sites/atxf.leostera.dev/`](sites/atxf.leostera.dev) | The specification website (Astro + Kumo), deployed to https://atxf.leostera.dev |
 
 ## Validate a transcript
 
 ```sh
 bun install
-bun src/cli.ts path/to/session.atxf.jsonl
+bun packages/core/src/cli.ts path/to/session.atxf.jsonl
 bun run check   # typecheck and tests
 ```
 
 ## Roadmap
 
-- A reference `buildContext` implementation for SPEC §5, with conformance fixtures.
+- Conformance fixtures for the reference `buildContext` (SPEC §5).
+- Reconciliation: merge several copies of one session into a single tree that keeps every branch.
+- Signed seals.
 - Converters: Pi, Codex, Claude Code and OpenCode to ATXF, and ATXF to ATIF.
 - Native seed generation: ATXF to a target agent's session format, for cross-agent continuation.
 
