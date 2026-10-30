@@ -7,21 +7,15 @@
   "type": "module",
   "packageManager": "bun@1.4.3",
   "bin": {
-    "atxf-validate": "packages/core/src/cli.ts"
+    "atxf": "packages/atxf/src/cli.ts"
   },
   "scripts": {
-    "validate": "bun packages/core/src/cli.ts examples/*.atxf.jsonl",
+    "validate": "bun packages/atxf/src/cli.ts validate examples/*.atxf.jsonl",
     "test": "bun test",
     "check": "tsc --noEmit && bun test"
   },
   "devDependencies": {
-    "@atxf/claude-code": "workspace:*",
-    "@atxf/codex": "workspace:*",
-    "@atxf/core": "workspace:*",
-    "@atxf/gemini-cli": "workspace:*",
-    "@atxf/opencode": "workspace:*",
-    "@atxf/pi": "workspace:*",
-    "@atxf/reconcile": "workspace:*",
+    "@leostera/atxf": "workspace:*",
     "@leostera/feynman": "^0.12.0",
     "@types/bun": "^1.4.4",
     "fast-check": "^4.10.2",

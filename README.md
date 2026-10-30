@@ -41,24 +41,37 @@ ATXF aims to be general enough to hold any of these formats without losing their
 | [`schema/v0.1/atxf.schema.json`](schema/v0.1/atxf.schema.json) | JSON Schema (draft 2020-12) for one record (one line) |
 | [`docs/mappings.md`](docs/mappings.md) | How Pi, Codex, Claude Code, OpenCode, Gemini CLI and ATIF map onto ATXF |
 | [`examples/`](examples) | Example transcripts in the style of each source |
-| [`packages/core/`](packages/core) | `@atxf/core`: types, validator (schema, cross-record invariants, hashes and seals), tree and context utilities |
+| [`packages/atxf/`](packages/atxf) | `@leostera/atxf`: types, validator, hashes and seals, context building, lossless converters for Pi, Claude Code, Codex, OpenCode and Gemini CLI (`@leostera/atxf/pi`, …), reconciliation (`@leostera/atxf/reconcile`) and the `atxf` CLI |
+| [`fixtures/`](fixtures) | Native session files per agent, shared by the tests |
+| [`specs/`](specs) | Feynman models of distributed behaviour: [`reconcile.ts`](specs/reconcile.ts) |
 | [`sites/atxf.leostera.dev/`](sites/atxf.leostera.dev) | The specification website (Astro + Kumo), deployed to https://atxf.leostera.dev |
 
-## Validate a transcript
+## Use it
 
 ```sh
 bun install
-bun packages/core/src/cli.ts path/to/session.atxf.jsonl
+bun packages/atxf/src/cli.ts validate path/to/session.atxf.jsonl
+bun packages/atxf/src/cli.ts convert --from pi --to codex session.jsonl > rollout.jsonl
+bun packages/atxf/src/cli.ts reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
 bun run check   # typecheck and tests
+```
+
+```ts
+import { buildContext } from "@leostera/atxf";
+import { reconcile } from "@leostera/atxf/reconcile";
+import { pi } from "@leostera/atxf/pi";
+import { codex } from "@leostera/atxf/codex";
+
+const transcript = pi.toAtxf(await Bun.file("session.jsonl").text());
+const rollout = codex.fromAtxf(transcript); // Codex can continue it; reading it back gives `transcript`
 ```
 
 ## Roadmap
 
 - Conformance fixtures for the reference `buildContext` (SPEC §5).
-- Reconciliation: merge several copies of one session into a single tree that keeps every branch.
 - Signed seals.
-- Converters: Pi, Codex, Claude Code and OpenCode to ATXF, and ATXF to ATIF.
-- Native seed generation: ATXF to a target agent's session format, for cross-agent continuation.
+- ATXF to ATIF.
+- Streaming converters, so a session needs constant memory.
 
 ## License
 

@@ -227,7 +227,7 @@ Copies of one session diverge when it is continued in two places. Reconciling co
 - **Order.** Records are written referenced-first; among the records ready, earliest `time` first, then smallest key. The active leaf (§4) follows from that order, so copies holding the same records show the same place.
 - **Seals.** The copies' seals are dropped. When any copy declares integrity, the result is hashed and sealed.
 
-Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `packages/reconcile` implements this; `specs/reconcile.ts` models it.
+Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `@leostera/atxf/reconcile` implements this; `specs/reconcile.ts` models it.
 
 ## 19. Privacy
 

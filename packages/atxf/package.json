@@ -1,0 +1,35 @@
+{
+  "name": "@leostera/atxf",
+  "version": "0.1.0",
+  "description": "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation",
+  "license": "MIT",
+  "author": "Leo Ostera",
+  "repository": { "type": "git", "url": "git+https://github.com/leostera/atxf.git", "directory": "packages/atxf" },
+  "homepage": "https://atxf.leostera.dev",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./formats": "./src/formats/index.ts",
+    "./pi": "./src/formats/pi.ts",
+    "./claude-code": "./src/formats/claude-code.ts",
+    "./codex": "./src/formats/codex.ts",
+    "./opencode": "./src/formats/opencode.ts",
+    "./gemini-cli": "./src/formats/gemini-cli.ts",
+    "./reconcile": "./src/reconcile.ts",
+    "./testing": "./src/testing.ts",
+    "./laws": "./src/laws.ts"
+  },
+  "bin": {
+    "atxf": "./src/cli.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "peerDependencies": {
+    "fast-check": "^4.10.2"
+  },
+  "peerDependenciesMeta": {
+    "fast-check": { "optional": true }
+  }
+}

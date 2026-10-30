@@ -5,74 +5,29 @@
     "": {
       "name": "agent-transcript-exchange-format",
       "devDependencies": {
-        "@atxf/claude-code": "workspace:*",
-        "@atxf/codex": "workspace:*",
-        "@atxf/core": "workspace:*",
-        "@atxf/gemini-cli": "workspace:*",
-        "@atxf/opencode": "workspace:*",
-        "@atxf/pi": "workspace:*",
-        "@atxf/reconcile": "workspace:*",
+        "@leostera/atxf": "workspace:*",
         "@leostera/feynman": "^0.12.0",
         "@types/bun": "^1.4.4",
         "fast-check": "^4.10.2",
         "typescript": "^7.0.2",
       },
     },
-    "packages/claude-code": {
-      "name": "@atxf/claude-code",
-      "version": "0.1.0",
-      "dependencies": {
-        "@atxf/core": "workspace:*",
-      },
-    },
-    "packages/codex": {
-      "name": "@atxf/codex",
-      "version": "0.1.0",
-      "dependencies": {
-        "@atxf/core": "workspace:*",
-      },
-    },
-    "packages/core": {
-      "name": "@atxf/core",
+    "packages/atxf": {
+      "name": "@leostera/atxf",
       "version": "0.1.0",
       "bin": {
-        "atxf-validate": "./src/cli.ts",
+        "atxf": "./src/cli.ts",
       },
       "dependencies": {
         "ajv": "^8.17.1",
         "ajv-formats": "^3.0.1",
       },
-    },
-    "packages/gemini-cli": {
-      "name": "@atxf/gemini-cli",
-      "version": "0.1.0",
-      "dependencies": {
-        "@atxf/core": "workspace:*",
+      "peerDependencies": {
+        "fast-check": "^4.10.2",
       },
-    },
-    "packages/opencode": {
-      "name": "@atxf/opencode",
-      "version": "0.1.0",
-      "dependencies": {
-        "@atxf/core": "workspace:*",
-      },
-    },
-    "packages/pi": {
-      "name": "@atxf/pi",
-      "version": "0.1.0",
-      "dependencies": {
-        "@atxf/core": "workspace:*",
-      },
-    },
-    "packages/reconcile": {
-      "name": "@atxf/reconcile",
-      "version": "0.1.0",
-      "bin": {
-        "atxf-reconcile": "./src/cli.ts",
-      },
-      "dependencies": {
-        "@atxf/core": "workspace:*",
-      },
+      "optionalPeers": [
+        "fast-check",
+      ],
     },
     "sites/atxf.leostera.dev": {
       "name": "@atxf/www",
@@ -142,20 +97,6 @@
     "@astrojs/underscore-redirects": ["@astrojs/underscore-redirects@1.0.4", "", {}, "sha512-sD3bn7i2yC+ocxlhCTshdg3gUM471Nag3wgyHilA+kpmufokvmUu1p5Mw5GT5Xp8SPC1Nlq0BJAgV/lslnWvRw=="],
 
     "@astrojs/yaml2ts": ["@astrojs/yaml2ts@0.2.4", "", { "dependencies": { "yaml": "^2.8.3" } }, "sha512-8oddpOae35pJsXPQXhTkM0ypfKPskVsh2bCxRtbf7e+/Epw2nReakFYpLKjZMEr75CsoF203PMnCocpfz0s69A=="],
-
-    "@atxf/claude-code": ["@atxf/claude-code@workspace:packages/claude-code"],
-
-    "@atxf/codex": ["@atxf/codex@workspace:packages/codex"],
-
-    "@atxf/core": ["@atxf/core@workspace:packages/core"],
-
-    "@atxf/gemini-cli": ["@atxf/gemini-cli@workspace:packages/gemini-cli"],
-
-    "@atxf/opencode": ["@atxf/opencode@workspace:packages/opencode"],
-
-    "@atxf/pi": ["@atxf/pi@workspace:packages/pi"],
-
-    "@atxf/reconcile": ["@atxf/reconcile@workspace:packages/reconcile"],
 
     "@atxf/www": ["@atxf/www@workspace:sites/atxf.leostera.dev"],
 
@@ -316,6 +257,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
+
+    "@leostera/atxf": ["@leostera/atxf@workspace:packages/atxf"],
 
     "@leostera/feynman": ["@leostera/feynman@0.12.0", "", { "dependencies": { "@cloudflare/kumo": "^2.15.0", "@phosphor-icons/react": "^2.1.10", "@types/react": "^19.3.0", "calldiff": "0.5.0", "react": "^19.3.1", "shiki": "^4.5.0", "typescript": "^7.0.2", "vite": "^8.3.5" }, "bin": { "feynman": "bin/feynman.ts" } }, "sha512-6wvXsW1yrlIjxVlP1ftmOmwge5bB+TFXg3YQxLFnJUDaTqQkR7uziNJViXtXlkjkvTjYtj8a8dAWHPxlXSK8Rw=="],
 
