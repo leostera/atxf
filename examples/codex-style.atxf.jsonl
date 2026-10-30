@@ -1,0 +1,17 @@
+{"type":"transcript","atxf":"0.1","id":"019a-thread","time":"2026-10-29T14:00:00Z","source":{"agent":"codex","version":"0.161.0","format":"codex/rollout-jsonl","sessionId":"019a-thread"},"workspace":{"cwd":"/work/api","vcs":{"type":"git","branch":"main","commit":"4bc746c"}},"fidelity":{"topology":"linear","instructions":"partial","tools":"partial","reasoning":"encrypted","toolLifecycle":true,"turns":true,"usage":"aggregate","native":"all"}}
+{"type":"settings","id":"c1","parentId":null,"time":"2026-10-29T14:00:00Z","model":{"provider":"openai","id":"gpt-5.6","api":"openai-responses"},"reasoningEffort":"high","cwd":"/work/api","policy":{"approval":"on-request","sandbox":"workspace-write"},"native":{"source":"codex","format":"codex/rollout-jsonl","records":[{"timestamp":"2026-10-29T14:00:00.000Z","type":"turn_context","payload":{"cwd":"/work/api","model":"gpt-5.6"}}]}}
+{"type":"turn","id":"c2","parentId":"c1","time":"2026-10-29T14:00:01Z","phase":"start","turnId":"turn-1"}
+{"type":"message","id":"c3","parentId":"c2","time":"2026-10-29T14:00:01Z","role":"user","content":"Run the tests."}
+{"type":"message","id":"c4","parentId":"c3","time":"2026-10-29T14:00:03Z","role":"assistant","content":[{"type":"reasoning","summary":["Run the test suite."],"replay":[{"provider":"openai","api":"openai-responses","kind":"encrypted_content","data":"gAAAAABo..."}]},{"type":"tool_call","id":"call_9","name":"exec_command","arguments":{"cmd":"npm test"}}],"model":{"provider":"openai","id":"gpt-5.6","api":"openai-responses"},"stop":"tool_use"}
+{"type":"tool_status","id":"c5","parentId":"c4","time":"2026-10-29T14:00:03Z","toolCallId":"call_9","status":"approved"}
+{"type":"tool_status","id":"c6","parentId":"c5","time":"2026-10-29T14:00:03Z","toolCallId":"call_9","status":"running"}
+{"type":"message","id":"c7","parentId":"c6","time":"2026-10-29T14:00:09Z","role":"tool","toolCallId":"call_9","content":"2 failing","isError":false}
+{"type":"tool_status","id":"c8","parentId":"c7","time":"2026-10-29T14:00:09Z","toolCallId":"call_9","status":"completed"}
+{"type":"message","id":"c9","parentId":"c8","time":"2026-10-29T14:00:12Z","role":"assistant","content":[{"type":"text","text":"Two tests fail in auth.spec.ts."}],"stop":"end"}
+{"type":"usage","id":"c10","parentId":"c9","time":"2026-10-29T14:00:12Z","kind":"token_count","cumulative":true,"usage":{"input":9100,"output":420,"cacheRead":6000,"reasoning":256,"total":15520}}
+{"type":"turn","id":"c11","parentId":"c10","time":"2026-10-29T14:00:12Z","phase":"end","turnId":"turn-1","outcome":"succeeded"}
+{"type":"turn","id":"c12","parentId":"c11","time":"2026-10-29T14:01:00Z","phase":"start","turnId":"turn-2"}
+{"type":"message","id":"c13","parentId":"c12","time":"2026-10-29T14:01:00Z","role":"user","content":"Delete the failing tests."}
+{"type":"turn","id":"c14","parentId":"c13","time":"2026-10-29T14:01:02Z","phase":"end","turnId":"turn-2","outcome":"interrupted"}
+{"type":"leaf","id":"r1","time":"2026-10-29T14:01:05Z","targetId":"c11","reason":"rollback"}
+{"type":"compaction","id":"c15","parentId":"c11","time":"2026-10-29T14:10:00Z","strategy":"replace","replacement":[{"role":"user","content":"Run the tests."},{"role":"assistant","content":[{"type":"text","text":"Two tests fail in auth.spec.ts."}]}],"replay":[{"provider":"openai","api":"openai-responses","kind":"encrypted_content","data":"gAAAAABq..."}],"reason":"auto"}

@@ -1,0 +1,11 @@
+{"type":"transcript","atxf":"0.1","id":"ses_parent","time":"2026-10-29T15:00:00Z","source":{"agent":"opencode","version":"2.0.20"},"fidelity":{"topology":"linear","toolLifecycle":true,"turns":true,"usage":"per-response"}}
+{"type":"settings","id":"o1","parentId":null,"time":"2026-10-29T15:00:00Z","agent":"build","model":{"provider":"cloudflare-workers-ai","id":"@cf/zai-org/glm-5.3-flash"}}
+{"type":"checkpoint","id":"o2","parentId":"o1","time":"2026-10-29T15:00:00Z","snapshot":"snap_a1"}
+{"type":"message","id":"o3","parentId":"o2","time":"2026-10-29T15:00:01Z","role":"user","content":"Rename getUser to fetchUser everywhere."}
+{"type":"message","id":"o4","parentId":"o3","time":"2026-10-29T15:00:03Z","role":"assistant","content":[{"type":"tool_call","id":"tc_1","name":"task","arguments":{"description":"find call sites","agent":"explore"}}],"stop":"tool_use"}
+{"type":"agent_link","id":"o5","parentId":"o4","time":"2026-10-29T15:00:03Z","relation":"spawn","transcriptId":"ses_child","agent":{"name":"explore"},"toolCallId":"tc_1"}
+{"type":"agent_link","id":"o6","parentId":"o5","time":"2026-10-29T15:00:20Z","relation":"result","transcriptId":"ses_child","toolCallId":"tc_1","content":"12 call sites in src/"}
+{"type":"message","id":"o7","parentId":"o6","time":"2026-10-29T15:00:20Z","role":"tool","toolCallId":"tc_1","toolName":"task","content":"12 call sites in src/"}
+{"type":"message","id":"o8","parentId":"o7","time":"2026-10-29T15:00:40Z","role":"assistant","content":[{"type":"text","text":"Renamed all 12 call sites."}],"stop":"end"}
+{"type":"checkpoint","id":"o9","parentId":"o8","time":"2026-10-29T15:00:40Z","snapshot":"snap_b2","files":[{"path":"src/user.ts","status":"modified","additions":3,"deletions":3}]}
+{"type":"leaf","id":"v1","time":"2026-10-29T15:01:00Z","targetId":"o2","reason":"revert","restoreCheckpointId":"o2"}

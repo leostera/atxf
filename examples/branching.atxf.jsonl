@@ -1,0 +1,14 @@
+{"type":"transcript","atxf":"0.1","id":"t-branching","time":"2026-10-29T13:00:00Z","source":{"agent":"pi","version":"1.3.0"},"fidelity":{"topology":"tree","instructions":"full","tools":"full","reasoning":"raw","usage":"per-response"}}
+{"type":"context","id":"a1","parentId":null,"time":"2026-10-29T13:00:00Z","mode":"replace","instructions":[{"name":"preamble","text":"You are a coding assistant."}],"toolsAdded":[{"name":"bash"},{"name":"edit"}]}
+{"type":"message","id":"a2","parentId":"a1","time":"2026-10-29T13:00:01Z","role":"user","content":"Fix the flaky test."}
+{"type":"message","id":"a3","parentId":"a2","time":"2026-10-29T13:00:04Z","role":"assistant","content":[{"type":"text","text":"Approach A: add a retry."}],"stop":"end"}
+{"type":"message","id":"a4","parentId":"a3","time":"2026-10-29T13:00:10Z","role":"user","content":"Hmm, try something else."}
+{"type":"message","id":"a5","parentId":"a4","time":"2026-10-29T13:00:12Z","role":"assistant","content":[{"type":"text","text":"Approach A2: increase the timeout."}],"stop":"end"}
+{"type":"label","id":"l1","time":"2026-10-29T13:00:13Z","targetId":"a3","label":"retry-idea"}
+{"type":"branch_summary","id":"a6","parentId":"a2","time":"2026-10-29T13:00:20Z","fromId":"a5","summary":"Tried retries and longer timeouts; both mask the race instead of fixing it."}
+{"type":"message","id":"a7","parentId":"a6","time":"2026-10-29T13:00:21Z","role":"user","content":"Find the actual race.","origin":{"kind":"human"}}
+{"type":"message","id":"a8","parentId":"a7","time":"2026-10-29T13:00:30Z","role":"assistant","content":[{"type":"text","text":"The fixture shares a port across tests. Here is a 4000-line log dump..."}],"stop":"end"}
+{"type":"context_edit","id":"a9","parentId":"a8","time":"2026-10-29T13:00:31Z","targetId":"a8","replacement":[{"type":"text","text":"The fixture shares a port across tests. (log elided)"}]}
+{"type":"compaction","id":"a10","parentId":"a9","time":"2026-10-29T13:05:00Z","strategy":"summary","summary":"User wants the flaky test fixed at the root. Cause: shared port in the fixture.","firstKeptId":"a7","snapshot":{"instructions":[{"name":"preamble","text":"You are a coding assistant."}],"tools":[{"name":"bash"},{"name":"edit"}]},"reason":"manual","tokensBefore":48210}
+{"type":"message","id":"a11","parentId":"a10","time":"2026-10-29T13:05:10Z","role":"user","content":"Allocate a free port per test."}
+{"type":"leaf","id":"n1","time":"2026-10-29T13:06:00Z","targetId":"a5","reason":"navigate"}
