@@ -35,7 +35,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "prepack": "bun run build && rm schema LICENSE && cp -R ../../schema schema && cp ../../LICENSE LICENSE",
     "postpack": "rm -rf schema LICENSE && ln -s ../../schema schema && ln -s ../../LICENSE LICENSE"
   },
@@ -84,7 +84,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "atxf": "./dist/cli.js"
+    "atxf": "dist/cli.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
