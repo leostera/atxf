@@ -12,6 +12,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run validate
+      - run: bun run --cwd packages/atxf-ts build
       - run: bun run --cwd sites/atxf.leostera.dev check
       - run: bun run --cwd sites/atxf.leostera.dev build
   rust:

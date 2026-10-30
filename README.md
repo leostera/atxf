@@ -51,9 +51,9 @@ ATXF aims to be general enough to hold any of these formats without losing their
 ## Use it
 
 ```sh
-bunx @leostera/atxf validate path/to/session.atxf.jsonl
-bunx @leostera/atxf convert --from pi --to codex session.jsonl > rollout.jsonl
-bunx @leostera/atxf reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
+npx @leostera/atxf validate path/to/session.atxf.jsonl      # Node 22+, or bunx
+npx @leostera/atxf convert --from pi --to codex session.jsonl > rollout.jsonl
+npx @leostera/atxf reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
 ```
 
 In this repository, `bun run atxf` runs the same CLI from source:

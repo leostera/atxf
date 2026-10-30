@@ -1,5 +1,5 @@
-import Ajv2020 from "ajv/dist/2020.js";
-import addFormats from "ajv-formats";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import formatsModule, { type FormatsPlugin } from "ajv-formats";
 import { verifyIntegrity } from "./integrity.ts";
 import { TREE_TYPES, type EntryRecord, type TranscriptHeader } from "./types.ts";
 import schema from "../schema/v0.1/atxf.schema.json" with { type: "json" };
@@ -20,6 +20,8 @@ export interface ValidationResult {
 
 type JsonRecord = { type: string; id: string; [key: string]: unknown };
 
+// ajv-formats is CommonJS: its default import is the plugin under bundlers, and its module object under Node.
+const addFormats = ((formatsModule as unknown as { default?: FormatsPlugin }).default ?? formatsModule) as FormatsPlugin;
 const ajv = new Ajv2020({ allErrors: false, strict: false });
 addFormats(ajv);
 const validateRecord = ajv.compile(schema);

@@ -10,31 +10,81 @@
     "directory": "packages/atxf-ts"
   },
   "homepage": "https://atxf.leostera.dev",
+  "bugs": "https://github.com/leostera/atxf/issues",
+  "keywords": [
+    "agents",
+    "transcripts",
+    "llm",
+    "sessions",
+    "jsonl",
+    "pi",
+    "claude-code",
+    "codex",
+    "opencode",
+    "gemini-cli"
+  ],
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "files": [
+    "dist",
     "src",
     "schema",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "prepack": "rm schema LICENSE && cp -R ../../schema schema && cp ../../LICENSE LICENSE",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "bun run build && rm schema LICENSE && cp -R ../../schema schema && cp ../../LICENSE LICENSE",
     "postpack": "rm -rf schema LICENSE && ln -s ../../schema schema && ln -s ../../LICENSE LICENSE"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./formats": "./src/formats/index.ts",
-    "./pi": "./src/formats/pi.ts",
-    "./claude-code": "./src/formats/claude-code.ts",
-    "./codex": "./src/formats/codex.ts",
-    "./opencode": "./src/formats/opencode.ts",
-    "./gemini-cli": "./src/formats/gemini-cli.ts",
-    "./reconcile": "./src/reconcile.ts",
-    "./testing": "./src/testing.ts",
-    "./laws": "./src/laws.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./formats": {
+      "types": "./dist/formats/index.d.ts",
+      "default": "./dist/formats/index.js"
+    },
+    "./pi": {
+      "types": "./dist/formats/pi.d.ts",
+      "default": "./dist/formats/pi.js"
+    },
+    "./claude-code": {
+      "types": "./dist/formats/claude-code.d.ts",
+      "default": "./dist/formats/claude-code.js"
+    },
+    "./codex": {
+      "types": "./dist/formats/codex.d.ts",
+      "default": "./dist/formats/codex.js"
+    },
+    "./opencode": {
+      "types": "./dist/formats/opencode.d.ts",
+      "default": "./dist/formats/opencode.js"
+    },
+    "./gemini-cli": {
+      "types": "./dist/formats/gemini-cli.d.ts",
+      "default": "./dist/formats/gemini-cli.js"
+    },
+    "./reconcile": {
+      "types": "./dist/reconcile.d.ts",
+      "default": "./dist/reconcile.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./laws": {
+      "types": "./dist/laws.d.ts",
+      "default": "./dist/laws.js"
+    },
+    "./schema.json": "./schema/v0.1/atxf.schema.json",
+    "./package.json": "./package.json"
   },
   "bin": {
-    "atxf": "./src/cli.ts"
+    "atxf": "./dist/cli.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -47,5 +97,11 @@
     "fast-check": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
