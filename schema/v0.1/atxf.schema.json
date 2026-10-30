@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/leostera/agent-transcript-exchange-format/schema/v0.1/atxf.schema.json",
+  "$id": "https://atxf.leostera.dev/schema/v0.1/atxf.schema.json",
   "title": "ATXF v0.1 record",
   "description": "One line of an Agent Transcript Exchange Format (ATXF) JSONL file. The first line MUST be a `transcript` record. See SPEC.md for semantics that JSON Schema cannot express (references, ordering, context building).",
   "$ref": "#/$defs/record",

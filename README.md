@@ -1,5 +1,7 @@
 # ATXF: Agent Transcript Exchange Format
 
+Specification: **https://atxf.leostera.dev**
+
 **ATXF** is a JSON Schema and JSONL format for exchanging coding-agent session transcripts between tools such as Pi, Codex, Claude Code, OpenCode and Gemini CLI.
 
 > Status: **v0.1 draft**. Expect breaking changes until v1.
@@ -39,6 +41,7 @@ ATXF aims to be general enough to hold any of these formats without losing their
 | [`docs/mappings.md`](docs/mappings.md) | How Pi, Codex, Claude Code, OpenCode, Gemini CLI and ATIF map onto ATXF |
 | [`examples/`](examples) | Example transcripts in the style of each source |
 | [`src/validate.ts`](src/validate.ts) | Reference validator: schema plus cross-record invariants |
+| [`sites/atxf.leostera.dev/`](sites/atxf.leostera.dev) | The specification website (Astro + Kumo), deployed to https://atxf.leostera.dev |
 
 ## Validate a transcript
 

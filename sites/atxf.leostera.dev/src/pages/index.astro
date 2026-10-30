@@ -1,0 +1,41 @@
+---
+import { getEntry, render } from "astro:content";
+import Document from "../layouts/Document.astro";
+import RfcHeader from "../components/RfcHeader.astro";
+import { REPO_URL, SCHEMA_PATH, SITE_URL, VERSION, lastUpdated } from "../lib/site";
+
+const entry = await getEntry("docs", "spec");
+if (!entry) throw new Error("SPEC.md not found");
+const { Content, headings } = await render(entry);
+const toc = headings.filter((h) => h.depth === 2).map(({ slug, text }) => ({ slug, text }));
+---
+
+<Document
+  title="ATXF: Agent Transcript Exchange Format"
+  description="A JSON Schema and JSONL format for exchanging coding-agent session transcripts between Pi, Codex, Claude Code, OpenCode, Gemini CLI and other tools."
+  current="/"
+  headings={toc}
+>
+  <RfcHeader
+    slot="header"
+    designator={`ATXF/${VERSION}`}
+    title="Agent Transcript Exchange Format"
+    fields={[
+      { label: "Status", kind: "status", value: "Draft" },
+      { label: "Version", kind: "text", value: VERSION },
+      { label: "Updated", kind: "date", value: lastUpdated("SPEC.md") },
+      { label: "Author", kind: "text", value: "Leo Ostera" },
+      { label: "Conventions", kind: "link", value: "MUST, SHOULD and MAY as in RFC 2119", href: "https://www.rfc-editor.org/rfc/rfc2119" },
+      { label: "Schema", kind: "copy", value: `${SITE_URL}${SCHEMA_PATH}` },
+      { label: "Source", kind: "link", value: "SPEC.md", href: `${REPO_URL}/blob/main/SPEC.md` },
+    ]}
+  >
+    <p>
+      ATXF records a coding-agent session as an append-only tree of JSON records: what the model saw, the settings
+      it ran under, and the events around it. It is designed to hold the session formats of Pi, Codex, Claude Code,
+      OpenCode and Gemini CLI without flattening their branches, rewinds or compaction, and to carry each source
+      record verbatim so conversions can round-trip.
+    </p>
+  </RfcHeader>
+  <Content />
+</Document>

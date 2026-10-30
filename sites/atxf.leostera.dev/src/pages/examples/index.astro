@@ -1,0 +1,69 @@
+---
+import { createServerHighlighter, CodeBlock } from "@cloudflare/kumo/code/server";
+import { Link } from "@cloudflare/kumo";
+import Document from "../../layouts/Document.astro";
+import RfcHeader from "../../components/RfcHeader.astro";
+import { REPO_URL, VERSION, examples } from "../../lib/site";
+
+const DESCRIPTIONS: Record<string, string> = {
+  minimal: "A Pi-style session: instructions and tools, settings, one tool call with its result, and a title.",
+  branching:
+    "A tree: an abandoned branch carried forward by a branch summary, a label, a context edit, a summary compaction and a navigation leaf.",
+  "codex-style":
+    "A Codex-style linear thread: turn boundaries, policy settings, tool lifecycle, encrypted reasoning, cumulative usage, a rollback and a replace compaction.",
+  "revert-and-subagent":
+    "An OpenCode-style session: file checkpoints, a sub-agent spawn and result, and a revert that restores files.",
+  "subagent-child": "The sub-agent transcript spawned by the previous example, linked back through its header.",
+};
+
+const files = examples();
+const highlighter = await createServerHighlighter({ languages: ["json", "bash"] });
+const rendered = files.map((example) => ({
+  ...example,
+  description: DESCRIPTIONS[example.slug] ?? "",
+  html: highlighter.highlight(example.text.trimEnd(), "json"),
+}));
+const validateHtml = highlighter.highlight("bun install\nbun src/cli.ts examples/*.atxf.jsonl", "bash");
+highlighter.dispose();
+
+const toc = rendered.map((example) => ({ slug: example.slug, text: example.file }));
+---
+
+<Document
+  title="Examples · ATXF"
+  description="Example ATXF transcripts in the style of Pi, Codex and OpenCode sessions."
+  current="/examples/"
+  headings={toc}
+  tocTitle="Files"
+>
+  <RfcHeader
+    slot="header"
+    designator={`ATXF/${VERSION} · Appendix B`}
+    title="Example transcripts"
+    fields={[
+      { label: "Status", kind: "status", value: "Draft" },
+      { label: "Nature", kind: "text", value: "Informative" },
+      { label: "Source", kind: "link", value: "examples/", href: `${REPO_URL}/tree/main/examples` },
+    ]}
+  >
+    <p>
+      Each file is one transcript, one record per line. They are hand-written in the style of each source agent,
+      and all of them pass the schema and the cross-record checks of the reference validator:
+    </p>
+  </RfcHeader>
+  <div class="mb-4 max-w-[72ch]"><CodeBlock html={validateHtml} /></div>
+  {
+    rendered.map((example) => (
+      <section class="example">
+        <h2 id={example.slug}>{example.file}</h2>
+        <p>{example.description}</p>
+        <CodeBlock html={example.html} className="example-code" />
+        <p class="text-sm">
+          <Link href={`/examples/${example.file}`} variant="inline">
+            Raw file
+          </Link>
+        </p>
+      </section>
+    ))
+  }
+</Document>
