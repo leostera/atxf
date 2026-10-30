@@ -100,7 +100,8 @@ function checkReferences(
   const parents = new Map<string, string | null>();
   const nodes = new Map<string, JsonRecord>();
   const ids = new Set<string>();
-  const toolCallOwner = new Map<string, string>();
+  // Tool call id → the assistant messages holding it. Ids are unique along a path, not across branches (SPEC §3).
+  const toolCallOwner = new Map<string, string[]>();
 
   const ancestors = (id: string | null): Set<string> => {
     const seen = new Set<string>();
@@ -175,22 +176,24 @@ function checkMessage(
   line: number,
   record: JsonRecord,
   ancestors: (id: string | null) => Set<string>,
-  toolCallOwner: Map<string, string>,
+  toolCallOwner: Map<string, string[]>,
   error: (line: number, message: string) => void,
   warn: (line: number, message: string) => void,
 ) {
   if (record.role === "assistant") {
     for (const block of record.content as { type: string; id?: string }[]) {
       if (block.type !== "tool_call") continue;
-      if (toolCallOwner.has(block.id!)) error(line, `duplicate tool_call id \`${block.id}\``);
-      toolCallOwner.set(block.id!, record.id);
+      const owners = toolCallOwner.get(block.id!) ?? [];
+      const path = ancestors(record.parentId as string | null);
+      if (owners.some((owner) => owner === record.id || path.has(owner))) error(line, `duplicate tool_call id \`${block.id}\` on one path`);
+      toolCallOwner.set(block.id!, [...owners, record.id]);
     }
   }
   if (record.role === "tool") {
-    const owner = toolCallOwner.get(record.toolCallId as string);
-    if (owner === undefined) {
+    const owners = toolCallOwner.get(record.toolCallId as string);
+    if (owners === undefined) {
       warn(line, `tool result references unknown toolCallId \`${record.toolCallId}\``);
-    } else if (!ancestors(record.parentId as string | null).has(owner)) {
+    } else if (!owners.some((owner) => ancestors(record.parentId as string | null).has(owner))) {
       error(line, `tool result \`${record.toolCallId}\` is not on the same branch as its call`);
     }
   }

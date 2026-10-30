@@ -1,0 +1,17 @@
+{
+  "name": "@atxf/reconcile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reconcile copies of one ATXF session into one transcript that keeps every branch",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "atxf-reconcile": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@atxf/core": "workspace:*"
+  }
+}

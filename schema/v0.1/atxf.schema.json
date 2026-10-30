@@ -432,6 +432,10 @@
             "ids": {
               "description": "`stable`: ids come from the source and match across copies of the session. `synthetic`: the converter made them up.",
               "enum": ["stable", "synthetic"]
+            },
+            "nativeDigest": {
+              "description": "SHA-256 of the native file the transcript was read from. A writer emits native passthrough as the file only while it still prints to this digest. See SPEC.md, Native passthrough.",
+              "$ref": "#/$defs/hash"
             }
           },
           "additionalProperties": false

@@ -44,13 +44,13 @@ function decode(units: Unit[], context: DecodeContext): { header: TranscriptHead
   units.forEach((unit, index) => {
     const entry: J = isObject(unit.value) ? unit.value : {};
     if (context.known.has(index)) {
-      if (typeof entry.uuid === "string") tree.alias(entry.uuid, context.known.get(index) ?? tree.resolve(entry.parentUuid));
+      if (typeof entry.uuid === "string") tree.alias(entry.uuid, context.known.get(index) ?? tree.parentOf(entry.parentUuid));
       return;
     }
     const time = isoTime(entry.timestamp, header.time);
     const id = context.ids.take(typeof entry.uuid === "string" && entry.uuid !== "" ? entry.uuid : `claude-line-${index + 1}`);
     // Entries without a parent link (queue operations, snapshots) hang off the latest record.
-    const parentId = "parentUuid" in entry ? tree.resolve(entry.parentUuid) : tree.last;
+    const parentId = "parentUuid" in entry ? tree.parentOf(entry.parentUuid) : tree.last;
     const node = { id, parentId, time };
     const custom = (name: string) => {
       tree.alias(entry.uuid, id);
@@ -150,7 +150,7 @@ function userRecords(entry: J, node: { id: string; parentId: string | null; time
   for (const block of message.content) {
     if (!isObject(block)) continue;
     if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
-      const owner = tree.toolCallOwner(block.tool_use_id);
+      const owner = tree.toolCallOwner(block.tool_use_id, parentId);
       // ATXF requires a result to sit below its call; one elsewhere stays in native only.
       if (owner !== undefined && !tree.isAncestor(owner, parentId)) continue;
       const id = records.length === 0 ? node.id : tree.context.ids.take(`${node.id}:${block.tool_use_id}`);

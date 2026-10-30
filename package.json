@@ -15,15 +15,17 @@
     "check": "tsc --noEmit && bun test"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.4",
-    "fast-check": "^4.10.2",
-    "typescript": "^7.0.2",
-    "@atxf/core": "workspace:*",
-    "@atxf/pi": "workspace:*",
     "@atxf/claude-code": "workspace:*",
     "@atxf/codex": "workspace:*",
+    "@atxf/core": "workspace:*",
+    "@atxf/gemini-cli": "workspace:*",
     "@atxf/opencode": "workspace:*",
-    "@atxf/gemini-cli": "workspace:*"
+    "@atxf/pi": "workspace:*",
+    "@atxf/reconcile": "workspace:*",
+    "@leostera/feynman": "^0.12.0",
+    "@types/bun": "^1.4.4",
+    "fast-check": "^4.10.2",
+    "typescript": "^7.0.2"
   },
   "workspaces": [
     "packages/*",

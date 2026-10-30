@@ -1,4 +1,5 @@
 import { IdAllocator, type Converter } from "./convert.ts";
+import { canonicalJson, sha256 } from "./canonical.ts";
 import { addIntegrity } from "./integrity.ts";
 import { indexTree } from "./tree.ts";
 import { isPureNative, nativeUnits, type Framing, type Unit } from "./native.ts";
@@ -67,7 +68,8 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
     const carried = spec.carrier.detach(units);
     if (!carried) {
       const decoded = spec.decode(units, { known: new Map(), ids: new IdAllocator() });
-      const transcript = { header: decoded.header, records: decoded.records };
+      const header = { ...decoded.header, fidelity: { ...decoded.header.fidelity, nativeDigest: nativeDigest(text) } };
+      const transcript = { header, records: decoded.records };
       return integrity ? addIntegrity(transcript) : transcript;
     }
     const base = carried.transcript;
@@ -89,7 +91,15 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
 
   const fromAtxf = (transcript: Transcript, options: { carry?: boolean } = {}): string => {
     const carry = options.carry ?? true;
-    if (carry && isPureNative(transcript, spec.agent)) return spec.framing.print(nativeUnits(transcript, spec.framing.canonical));
+    if (carry && isPureNative(transcript, spec.agent)) {
+      // Native records alone stand for the transcript only if reading them back gives it: a reconciled transcript
+      // (SPEC §18) holds only native records too, but its branches may not fit one file of a linear format. Reading
+      // is deterministic, so printing the very file the transcript was read from is enough, and checking that costs
+      // one digest. A transcript without the digest is read back and compared instead.
+      const text = spec.framing.print(nativeUnits(transcript, spec.framing.canonical));
+      const digest = transcript.header.fidelity?.nativeDigest;
+      if (digest !== undefined ? digest === nativeDigest(text) : sameRecords(toAtxf(text, { integrity: false }), transcript)) return text;
+    }
     const encoded = spec.encode(transcript);
     const values = carry
       ? spec.carrier.attach(
@@ -101,6 +111,20 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
   };
 
   return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf };
+}
+
+/** The digest of a native file, recorded in `fidelity.nativeDigest` of the transcript read from it. */
+export function nativeDigest(text: string): string {
+  return `sha256:${sha256(text)}`;
+}
+
+/** Whether two transcripts hold the same header and records, ignoring hashes. Compares one record at a time. */
+function sameRecords(a: Transcript, b: Transcript): boolean {
+  if (a.records.length !== b.records.length) return false;
+  const header = ({ hash: _h, integrity: _i, ...rest }: TranscriptHeader) => canonicalJson(rest);
+  if (header(a.header) !== header(b.header)) return false;
+  const record = ({ hash: _, ...rest }: EntryRecord) => canonicalJson(rest);
+  return a.records.every((r, i) => record(r) === record(b.records[i]!));
 }
 
 /** The carried transcript as one JSON value: the header and records, in order. */

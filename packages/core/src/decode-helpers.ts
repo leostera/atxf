@@ -36,14 +36,17 @@ export class TreeBuilder {
   private readonly resolved = new Map<string, string | null>();
   private readonly parents = new Map<string, string | null>();
   private readonly types = new Map<string, string>();
-  private readonly toolCalls = new Map<string, string>();
+  /** Tool call id → the assistant messages holding it, in order. Ids are unique along a path, not across branches. */
+  private readonly toolCalls = new Map<string, string[]>();
   /** The last tree record, in file order: the parent for formats without explicit parent links. */
   last: string | null = null;
+  /** The carried transcript's active leaf, in a continuation. */
+  private continuesFrom: string | null = null;
 
   constructor(readonly context: DecodeContext) {
     for (const record of context.base?.records ?? []) this.observe(record);
     // A continuation picks up where the carried transcript is: its active leaf.
-    if (context.base) this.last = indexTree(context.base).activeLeaf;
+    if (context.base) this.last = this.continuesFrom = indexTree(context.base).activeLeaf;
   }
 
   private observe(record: EntryRecord) {
@@ -53,7 +56,7 @@ export class TreeBuilder {
       this.last = record.id;
     }
     if (record.type === "message" && record.role === "assistant") {
-      for (const block of record.content) if (block.type === "tool_call") this.toolCalls.set(block.id, record.id);
+      for (const block of record.content) if (block.type === "tool_call") this.toolCalls.set(block.id, [...(this.toolCalls.get(block.id) ?? []), record.id]);
     }
   }
 
@@ -66,6 +69,16 @@ export class TreeBuilder {
   resolve(nativeId: unknown): string | null {
     if (typeof nativeId !== "string") return null;
     return this.resolved.get(nativeId) ?? null;
+  }
+
+  /**
+   * The ATXF parent for a native parent reference. In a continuation, everything the agent appended continues the
+   * carried transcript, so a native root (`null`, as an agent writes for the first record of an empty file) is
+   * where the transcript is: its active leaf.
+   */
+  parentOf(nativeId: unknown): string | null {
+    if (nativeId === null && this.context.base) return this.continuesFrom;
+    return this.resolve(nativeId);
   }
 
   /** Whether `nativeId` has been seen, even if it resolves to no record. */
@@ -90,9 +103,10 @@ export class TreeBuilder {
     return false;
   }
 
-  /** The assistant message that issued tool call `id`, if any. */
-  toolCallOwner(id: string): string | undefined {
-    return this.toolCalls.get(id);
+  /** The assistant message that issued tool call `id`: the one on the path to `at`, else the latest. */
+  toolCallOwner(id: string, at?: string | null): string | undefined {
+    const owners = this.toolCalls.get(id) ?? [];
+    return (at === undefined ? undefined : owners.findLast((owner) => this.isAncestor(owner, at))) ?? owners.at(-1);
   }
 
   hasToolCall(id: string): boolean {

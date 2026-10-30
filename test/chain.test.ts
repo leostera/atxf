@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { opendirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import fc from "fast-check";
 import { conversationView, embeddedToolResults, summariesAsUser, type PortableMessage } from "@atxf/core";
@@ -69,31 +69,52 @@ const views: Record<string, (view: PortableMessage[]) => PortableMessage[]> = {
   "gemini-cli": (view) => embeddedToolResults(summariesAsUser(view)),
 };
 
-/** Real Pi sessions, when `ATXF_PI_SESSIONS` names a directory of them (e.g. ~/.pi/agent/sessions). */
+/**
+ * Real Pi sessions, when `ATXF_PI_SESSIONS` names a directory of them (e.g. ~/.pi/agent/sessions). The directory is
+ * walked lazily and each session is checked by test/pi-session.ts in a process of its own, `ATXF_PI_JOBS` at a time
+ * (default 1): only those sessions are in memory at once, so memory depends on the largest session, never on how
+ * many there are. Converting one takes about 40 times its size. `ATXF_PI_MAX_MB` skips larger sessions, and
+ * `ATXF_PI_LIMIT` stops early.
+ */
 const piSessions = process.env.ATXF_PI_SESSIONS;
 describe.skipIf(!piSessions)("real Pi sessions round-trip through every format, and keep their conversation without carry", () => {
-  const files: string[] = [];
-  const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (name.endsWith(".jsonl")) files.push(path);
-    }
-  };
-  if (piSessions) walk(piSessions);
-  const limit = Number(process.env.ATXF_PI_LIMIT ?? files.length);
-  test(`${Math.min(limit, files.length)} sessions`, () => {
-    const pi = converters[0]!.converter;
-    for (const file of files.slice(0, limit)) {
-      const text = readFileSync(file, "utf8");
-      const transcript = pi.toAtxf(text);
-      for (const { converter } of converters) {
-        const back = pi.fromAtxf(converter.toAtxf(converter.fromAtxf(transcript)));
-        if (back !== text) throw new Error(`${file} did not survive ${converter.agent}`);
-        const view = views[converter.agent] ?? ((v: PortableMessage[]) => v);
-        const clean = view(conversationView(converter.toAtxf(converter.fromAtxf(transcript, { carry: false }))));
-        expect(clean).toEqual(view(conversationView(transcript)));
+  test("every session", async () => {
+    const limit = Number(process.env.ATXF_PI_LIMIT ?? Infinity);
+    const jobs = Math.max(1, Number(process.env.ATXF_PI_JOBS ?? 1));
+    const maxBytes = Number(process.env.ATXF_PI_MAX_MB ?? Infinity) * 1024 * 1024;
+    let skipped = 0;
+    const script = join(import.meta.dir, "pi-session.ts");
+    const files = sessionFiles(piSessions!);
+    const failures: string[] = [];
+    let checked = 0;
+    const worker = async () => {
+      for (let next = files.next(); !next.done && checked < limit; next = files.next()) {
+        if (statSync(next.value).size > maxBytes) {
+          skipped += 1;
+          continue;
+        }
+        checked += 1;
+        const child = Bun.spawn(["bun", "--smol", script, next.value], { stdout: "ignore", stderr: "pipe" });
+        if ((await child.exited) !== 0) failures.push((await new Response(child.stderr).text()).trim() || `${next.value}: exited ${child.exitCode}`);
       }
-    }
-  }, 600_000);
+    };
+    await Promise.all(Array.from({ length: jobs }, worker));
+    console.log(`checked ${checked} Pi sessions${skipped ? `; skipped ${skipped} over ${maxBytes / 1024 / 1024} MB` : ""}`);
+    expect(failures).toEqual([]);
+    expect(checked).toBeGreaterThan(0);
+  }, 24 * 3_600_000);
 });
+
+/** The `.jsonl` files under `dir`, one at a time. */
+function* sessionFiles(dir: string): Generator<string> {
+  const handle = opendirSync(dir);
+  try {
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) yield* sessionFiles(path);
+      else if (entry.name.endsWith(".jsonl")) yield path;
+    }
+  } finally {
+    handle.closeSync();
+  }
+}

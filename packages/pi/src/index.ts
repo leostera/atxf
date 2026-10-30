@@ -58,7 +58,7 @@ function decode(units: Unit[], context: DecodeContext): { header: TranscriptHead
     const entry = unit.value;
     if (context.known.has(index)) {
       if (isObject(entry) && typeof entry.id === "string") {
-        tree.alias(entry.id, context.known.get(index) ?? tree.resolve(entry.parentId));
+        tree.alias(entry.id, context.known.get(index) ?? tree.parentOf(entry.parentId));
       }
       continue;
     }
@@ -95,7 +95,7 @@ function sessionHeader(session: J, native: ReturnType<typeof nativeOf> | undefin
 function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: DecodeContext, fallbackTime: string, hasContext: boolean): EntryRecord {
   const e: J = isObject(entry) ? entry : {};
   const id = context.ids.take(typeof e.id === "string" && e.id !== "" ? e.id : `pi-line-${index + 1}`);
-  const parentId = tree.resolve(e.parentId);
+  const parentId = tree.parentOf(e.parentId);
   const time = isoTime(e.timestamp, fallbackTime);
   const node = { id, parentId, time };
   const custom = (): EntryRecord => {

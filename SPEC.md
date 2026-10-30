@@ -29,7 +29,7 @@ Three *annotation* records sit outside the tree and apply to the whole transcrip
 - Every record except the header has an `id` that is unique within the transcript. The header's `id` is the transcript id and lives in a separate namespace.
 - Ids are opaque strings. Writers SHOULD reuse source ids when those are unique, which makes round-trips simpler.
 - Every reference (`parentId`, `targetId`, `fromId`, `firstKeptId`, `restoreCheckpointId`) MUST point to a tree record that appears **earlier** in the file. The tree is therefore acyclic by construction.
-- A tool result (`message` with `role: "tool"`) MUST be a descendant of the assistant message containing the matching `tool_call` block, when that call is present in the transcript. Tool call ids MUST be unique within a transcript.
+- A tool result (`message` with `role: "tool"`) MUST be a descendant of the assistant message containing the matching `tool_call` block, when that call is present in the transcript. Tool call ids MUST be unique along each path from a root; branches MAY reuse them, as when copies of a session are reconciled (§18), and a tool result answers the call among its ancestors.
 - Imported transcripts can be truncated. A tool result or `tool_status` whose call is absent is therefore allowed; validators SHOULD warn about it rather than reject it.
 
 ## 4. Tree and active leaf
@@ -118,6 +118,17 @@ The effective settings at a point are obtained by folding the `settings` records
 
 - `native` carries the verbatim source records an ATXF record was derived from. One ATXF record MAY carry several native records; a native record SHOULD appear in at most one ATXF record.
 - A producer that sets `native` on every record SHOULD declare `fidelity.native: "all"`. Converting back to the same source then means emitting the native records in file order.
+- `native.raw` holds the exact source text of each native record when `JSON.stringify` of `records` would not reproduce it. `native.of` names an earlier record derived from the same source records; `records` is then empty.
+- `fidelity.nativeDigest` is the SHA-256 of the native file a transcript was read from. A writer emits the native records as the file only while they still print to that digest.
+
+### 11.1 Lossless conversion
+
+A converter between a format and ATXF satisfies four laws:
+
+1. **Native round trip.** Reading a native file and writing it back for the same agent reproduces it byte for byte.
+2. **Valid output.** Every transcript a converter reads is valid.
+3. **Carry.** Writing any transcript for another agent and reading it back returns the transcript. The written file holds the agent's own records for the active context (§5), each marked with the ATXF id it stands for, and carries the whole transcript in a place the agent ignores. Records the agent appends later have no mark; they are read and attached at the carried transcript's active leaf.
+4. **Faithful view.** Writing without the carried transcript (`carry: false`) keeps the conversation (`conversationView`), up to what the format cannot express.
 
 ## 12. Usage
 
@@ -206,6 +217,18 @@ To prove that a record is covered by a seal, send the record and, for each recor
 
 The proof carries only digests of the other records on the path, not their content.
 
-## 18. Privacy
+## 18. Reconciliation
+
+Copies of one session diverge when it is continued in two places. Reconciling copies (same header `id`) yields one transcript that keeps every record of every copy:
+
+- **Same record.** Two records are the same when their reconciliation keys are equal. A key is a SHA-256 digest, under the domain tag `atxf/0.1/reconcile\n`, of the JCS form of `{content, refs}`, where `content` is the record without `hash`, with `id` and every reference field (§17.1, and `native.of`) set to `""`, and `refs` maps each reference field to the key of the record it names (or `null`). Keys ignore ids, so a record keeps its key when it is renamed, and copies with positional ids still agree on their shared records.
+- **Union.** The result holds each key once. Divergent suffixes become sibling branches.
+- **Ids.** Of records sharing an id, the smallest key keeps it; the others become `id~<hex>`, the shortest prefix of their key's hex digest (at least 8 characters) that is free, and every reference follows. When copies hold one record under different ids, the smallest id is kept.
+- **Order.** Records are written referenced-first; among the records ready, earliest `time` first, then smallest key. The active leaf (§4) follows from that order, so copies holding the same records show the same place.
+- **Seals.** The copies' seals are dropped. When any copy declares integrity, the result is hashed and sealed.
+
+Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `packages/reconcile` implements this; `specs/reconcile.ts` models it.
+
+## 19. Privacy
 
 Transcripts routinely contain source code, credentials pasted by users, file paths and personal data. Producers SHOULD offer redaction before export. `native` and `replay` can contain the same sensitive material in less visible form.

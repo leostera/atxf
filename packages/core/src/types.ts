@@ -174,6 +174,8 @@ export interface Fidelity {
   usage?: "per-response" | "aggregate" | "none";
   native?: "all" | "partial" | "none";
   ids?: "stable" | "synthetic";
+  /** SHA-256 of the native file the transcript was read from. Writers emit native passthrough only when it still prints that file. */
+  nativeDigest?: string;
 }
 
 export interface TranscriptHeader {
