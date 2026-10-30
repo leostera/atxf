@@ -1,0 +1,28 @@
+[package]
+name = "atxf"
+version = "0.1.0"
+edition = "2024"
+description = "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation"
+license = "MIT"
+authors = ["Leo Ostera"]
+repository = "https://github.com/leostera/atxf"
+homepage = "https://atxf.leostera.dev"
+readme = "README.md"
+keywords = ["agents", "transcripts", "llm", "sessions", "jsonl"]
+categories = ["encoding", "parser-implementations"]
+include = ["src/**", "schema/**", "README.md", "LICENSE"]
+
+[lib]
+name = "atxf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atxf"
+path = "src/main.rs"
+
+[dependencies]
+jsonschema = { version = "0.60", default-features = false }
+regex = "1"
+ryu-js = "1"
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"

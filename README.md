@@ -42,6 +42,8 @@ ATXF aims to be general enough to hold any of these formats without losing their
 | [`docs/mappings.md`](docs/mappings.md) | How Pi, Codex, Claude Code, OpenCode, Gemini CLI and ATIF map onto ATXF |
 | [`examples/`](examples) | Example transcripts in the style of each source |
 | [`packages/atxf-ts/`](packages/atxf-ts) | `@leostera/atxf`: types, validator, hashes and seals, context building, lossless converters for Pi, Claude Code, Codex, OpenCode and Gemini CLI (`@leostera/atxf/pi`, …), reconciliation (`@leostera/atxf/reconcile`) and the `atxf` CLI |
+| [`packages/atxf-rs/`](packages/atxf-rs) | The `atxf` Rust crate and binary: the same API, writing the same bytes and hashes as `@leostera/atxf` |
+| [`scripts/`](scripts) | `cross-check.sh` and `cross-check-generated.ts`: the TypeScript and Rust implementations must agree byte for byte |
 | [`fixtures/`](fixtures) | Native session files per agent, shared by the tests |
 | [`specs/`](specs) | Feynman models of distributed behaviour: [`reconcile.ts`](specs/reconcile.ts) |
 | [`sites/atxf.leostera.dev/`](sites/atxf.leostera.dev) | The specification website (Astro + Kumo), deployed to https://atxf.leostera.dev |
@@ -61,6 +63,20 @@ bun install
 bun run atxf validate path/to/session.atxf.jsonl
 bun run atxf convert --from pi --to codex session.jsonl > rollout.jsonl
 bun run check   # typecheck and tests
+```
+
+From Rust, the crate has the same converters and commands:
+
+```sh
+cargo install --path packages/atxf-rs
+atxf convert --from pi --to codex session.jsonl > rollout.jsonl
+```
+
+```rust
+use atxf::{formats, Converter};
+
+let transcript = formats::PI.to_atxf(&std::fs::read_to_string("session.jsonl")?, true)?;
+let rollout = formats::CODEX.from_atxf(&transcript, true)?;
 ```
 
 ```ts

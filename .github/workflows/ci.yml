@@ -14,3 +14,14 @@ jobs:
       - run: bun run validate
       - run: bun run --cwd sites/atxf.leostera.dev check
       - run: bun run --cwd sites/atxf.leostera.dev build
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check:rust
+      - run: bun run cross-check

@@ -10,7 +10,9 @@
     "atxf": "bun packages/atxf-ts/src/cli.ts",
     "validate": "bun run atxf validate examples/*.atxf.jsonl",
     "test": "bun test",
-    "check": "tsc --noEmit && bun test"
+    "check": "tsc --noEmit && bun test",
+    "check:rust": "cargo fmt --check --manifest-path packages/atxf-rs/Cargo.toml && cargo clippy --manifest-path packages/atxf-rs/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path packages/atxf-rs/Cargo.toml",
+    "cross-check": "scripts/cross-check.sh && bun scripts/cross-check-generated.ts"
   },
   "devDependencies": {
     "@leostera/atxf": "workspace:*",
