@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 export const REPO_ROOT = `${resolve(process.cwd(), "../..")}/`;
 export const SITE_URL = "https://atxf.leostera.dev";
 export const SCHEMA_PATH = "/schema/v0.1/atxf.schema.json";
-export const REPO_URL = "https://github.com/leostera/agent-transcript-exchange-format";
+export const REPO_URL = "https://github.com/leostera/atxf";
 export const VERSION = "0.1";
 
 /** Date of the last commit that touched `path`, or today when outside git. */
