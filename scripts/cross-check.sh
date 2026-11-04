@@ -42,6 +42,7 @@ inputs=(
   "codex:fixtures/codex/rollout-hand-built.jsonl"
   "gemini-cli:fixtures/gemini-cli/session-hand-built.jsonl"
   "opencode:fixtures/opencode/export-hand-built.json"
+  "opencode:fixtures/opencode/export-2.0.20.json"
 )
 for example in examples/*.atxf.jsonl; do inputs+=("atxf:$example"); done
 inputs+=("$@")

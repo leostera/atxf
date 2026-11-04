@@ -1,4 +1,4 @@
-import { IdAllocator, type Converter } from "./convert.ts";
+import { IdAllocator, type Converter, type FromAtxfOptions } from "./convert.ts";
 import { canonicalJson, sha256 } from "./canonical.ts";
 import { addIntegrity } from "./integrity.ts";
 import { indexTree } from "./tree.ts";
@@ -26,8 +26,11 @@ export interface FormatSpec {
    * exactly one returned record's `native`, in order.
    */
   decode(units: Unit[], context: DecodeContext): { header: TranscriptHeader; records: EntryRecord[] };
-  /** The format's records for the transcript's active context, each with the ATXF record id it stands for. */
-  encode(transcript: Transcript): Encoded[];
+  /**
+   * The format's records for the transcript's active context, each with the ATXF record id it stands for.
+   * `options.sessionId` is the native session the records will be loaded as (see `FromAtxfOptions`).
+   */
+  encode(transcript: Transcript, options: { sessionId?: string }): Encoded[];
   carrier: Carrier;
 }
 
@@ -89,9 +92,12 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
     return base.header.integrity ? addIntegrity(transcript) : transcript;
   };
 
-  const fromAtxf = (transcript: Transcript, options: { carry?: boolean } = {}): string => {
+  const fromAtxf = (transcript: Transcript, options: FromAtxfOptions = {}): string => {
     const carry = options.carry ?? true;
-    if (carry && isPureNative(transcript, spec.agent)) {
+    // Native records hold the ids of the session they were read from, so they stand for the transcript only when
+    // the file is loaded as that same session.
+    const sameSession = options.sessionId === undefined || options.sessionId === transcript.header.source.sessionId;
+    if (carry && sameSession && isPureNative(transcript, spec.agent)) {
       // Native records alone stand for the transcript only if reading them back gives it: a reconciled transcript
       // (SPEC §18) holds only native records too, but its branches may not fit one file of a linear format. Reading
       // is deterministic, so printing the very file the transcript was read from is enough, and checking that costs
@@ -100,7 +106,7 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
       const digest = transcript.header.fidelity?.nativeDigest;
       if (digest !== undefined ? digest === nativeDigest(text) : sameRecords(toAtxf(text, { integrity: false }), transcript)) return text;
     }
-    const encoded = spec.encode(transcript);
+    const encoded = spec.encode(transcript, { sessionId: options.sessionId });
     const values = carry
       ? spec.carrier.attach(
           encoded.map(({ value, source }) => spec.carrier.mark(value, source)),

@@ -18,7 +18,18 @@ export interface Converter {
    * Writes a transcript as native session text. With `carry: false`, writes only the agent's own records for the
    * active context, without marks or the carried transcript: a clean file that no longer round-trips.
    */
-  fromAtxf(transcript: Transcript, options?: { carry?: boolean }): string;
+  fromAtxf(transcript: Transcript, options?: FromAtxfOptions): string;
+}
+
+export interface FromAtxfOptions {
+  /** Write marks and the carried transcript, so the file reads back as the same transcript. Default true. */
+  carry?: boolean;
+  /**
+   * The id of the native session the file will be loaded as, when that is not the transcript's own session, e.g.
+   * when an agent replaces one of its sessions with a shared transcript. Formats whose ids must be unique across
+   * sessions derive their ids from it. Default: the transcript's `source.sessionId`, else its id.
+   */
+  sessionId?: string;
 }
 
 /** A copy of the transcript without native passthrough, as if it came from another agent. */

@@ -11,6 +11,7 @@ import {
   jsonDocument,
   millisFromIso,
   nativeOf,
+  sha256,
   nativeOfShared,
   TreeBuilder,
   type AssistantBlock,
@@ -235,11 +236,25 @@ function toolContent(content: unknown[]): UserContent {
 
 const FINISH: Record<StopReason, string> = { end: "stop", tool_use: "tool-calls", max_tokens: "length", refusal: "content-filter", error: "error", aborted: "unknown", other: "unknown" };
 
-function encode(transcript: Transcript): Encoded[] {
+/** OpenCode session ids start with `ses`. */
+const sessionId = (id: string) => (id.startsWith("ses") ? id : `ses_${id}`);
+
+/**
+ * OpenCode message ids are unique across all of its sessions, not just within one, and the same transcript may be
+ * loaded into several sessions (two OpenCode sessions joined to one shared file, or a session holding messages of
+ * another). So every message id is scoped to the session it is written for, by a short digest of that session's id.
+ * The ids stay deterministic, so writing the same transcript for the same session again gives the same ids, which
+ * is what replacing a session in place relies on. Reading the file back restores the ATXF ids from the marks.
+ */
+const messageScope = (session: string) => sha256(`atxf/opencode/session\n${session}`).slice(0, 12);
+
+function encode(transcript: Transcript, options: { sessionId?: string }): Encoded[] {
   const context = buildContext(transcript);
   const times = new Map(transcript.records.map((record) => [record.id, record.time]));
+  const session = sessionId(options.sessionId ?? transcript.header.source.sessionId ?? transcript.header.id);
+  const scope = messageScope(session);
   const ids = new IdAllocator();
-  const msgId = (source: string) => ids.take(source.startsWith("msg_") ? source : `msg_${source}`);
+  const msgId = (source: string) => ids.take(`msg_${scope}_${source.startsWith("msg_") ? source.slice(4) : source}`);
   const results = new Map<string, MessageBody & { role: "tool" }>();
   for (const message of context.messages) if (message.body.role === "tool" && !results.has(message.body.toolCallId)) results.set(message.body.toolCallId, message.body);
   const created = (source: string) => millisFromIso(times.get(source) ?? transcript.header.time);
@@ -249,7 +264,7 @@ function encode(transcript: Transcript): Encoded[] {
     {
       value: {
         info: compact({
-          id: transcript.header.source.sessionId ?? transcript.header.id,
+          id: session,
           projectID: "atxf",
           title: transcript.header.title,
           cost: 0,
@@ -262,7 +277,7 @@ function encode(transcript: Transcript): Encoded[] {
     },
   ];
   if (context.settings.model) {
-    out.push({ value: { id: ids.take("msg_atxf_model"), type: "model-switched", model: { id: context.settings.model.id, providerID: context.settings.model.provider }, time: { created: millisFromIso(transcript.header.time) } }, source: null });
+    out.push({ value: { id: ids.take(`msg_${scope}_atxf_model`), type: "model-switched", model: { id: context.settings.model.id, providerID: context.settings.model.provider }, time: { created: millisFromIso(transcript.header.time) } }, source: null });
   }
 
   context.messages.forEach((message, index) => {
@@ -272,7 +287,7 @@ function encode(transcript: Transcript): Encoded[] {
     if (message.kind === "compaction_summary" || message.kind === "branch_summary") {
       // A compaction starts the context; a summary later on can only be a user message.
       const summary = contentText(body.content as UserContent);
-      out.push({ value: index === 0 ? { ...base, type: "compaction", status: "completed", reason: "auto", summary } : { ...base, type: "user", text: summary, files: [], agents: [], skills: [] }, source });
+      out.push({ value: index === 0 ? { ...base, type: "compaction", status: "completed", reason: "auto", summary, recent: "" } : { ...base, type: "user", text: summary, files: [], agents: [], skills: [] }, source });
       return;
     }
     switch (body.role) {
@@ -312,6 +327,8 @@ function encode(transcript: Transcript): Encoded[] {
         out.push({
           value: compact({
             ...base,
+            // OpenCode imports only completed assistant messages.
+            time: { created: created(source), completed: created(source) },
             type: "assistant",
             agent: "build",
             model: { id: body.model?.id ?? "unknown", providerID: body.model?.provider ?? "unknown" },
