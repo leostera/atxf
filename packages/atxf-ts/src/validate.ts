@@ -105,13 +105,16 @@ function checkReferences(
   // Tool call id → the assistant messages holding it. Ids are unique along a path, not across branches (SPEC §3).
   const toolCallOwner = new Map<string, string[]>();
 
-  const ancestors = (id: string | null): Set<string> => {
-    const seen = new Set<string>();
-    for (let cursor = id; cursor !== null && cursor !== undefined; cursor = parents.get(cursor) ?? null) {
-      if (seen.has(cursor)) break;
-      seen.add(cursor);
+  // Whether the path up from `id` (itself included) reaches a record `found` accepts. Walks only as far as it must:
+  // a tool result's call is usually a step or two up. A path never revisits a record unless ids repeat, and then it
+  // stops after as many steps as there are records.
+  const reaches = (id: string | null, found: (id: string) => boolean): boolean => {
+    let cursor = id;
+    for (let steps = 0; steps <= parents.size && cursor !== null && cursor !== undefined; steps++) {
+      if (found(cursor)) return true;
+      cursor = parents.get(cursor) ?? null;
     }
-    return seen;
+    return false;
   };
   const requireNode = (line: number, field: string, id: unknown) => {
     if (typeof id === "string" && !nodes.has(id)) error(line, `${field} \`${id}\` does not reference an earlier tree record`);
@@ -134,12 +137,13 @@ function checkReferences(
 
     switch (record.type) {
       case "message":
-        checkMessage(line, record, ancestors, toolCallOwner, error, warn);
+        checkMessage(line, record, reaches, toolCallOwner, error, warn);
         break;
       case "compaction":
         if (record.strategy === "summary" && typeof record.firstKeptId === "string") {
           requireNode(line, "firstKeptId", record.firstKeptId);
-          if (!ancestors(record.parentId as string | null).has(record.firstKeptId)) {
+          const kept = record.firstKeptId;
+          if (!reaches(record.parentId as string | null, (id) => id === kept)) {
             error(line, `firstKeptId \`${record.firstKeptId}\` must be an ancestor of the compaction`);
           }
         }
@@ -177,7 +181,7 @@ function checkReferences(
 function checkMessage(
   line: number,
   record: JsonRecord,
-  ancestors: (id: string | null) => Set<string>,
+  reaches: (id: string | null, found: (id: string) => boolean) => boolean,
   toolCallOwner: Map<string, string[]>,
   error: (line: number, message: string) => void,
   warn: (line: number, message: string) => void,
@@ -186,8 +190,9 @@ function checkMessage(
     for (const block of record.content as { type: string; id?: string }[]) {
       if (block.type !== "tool_call") continue;
       const owners = toolCallOwner.get(block.id!) ?? [];
-      const path = ancestors(record.parentId as string | null);
-      if (owners.some((owner) => owner === record.id || path.has(owner))) error(line, `duplicate tool_call id \`${block.id}\` on one path`);
+      if (owners.length > 0 && (owners.includes(record.id) || reaches(record.parentId as string | null, (id) => owners.includes(id)))) {
+        error(line, `duplicate tool_call id \`${block.id}\` on one path`);
+      }
       toolCallOwner.set(block.id!, [...owners, record.id]);
     }
   }
@@ -195,7 +200,7 @@ function checkMessage(
     const owners = toolCallOwner.get(record.toolCallId as string);
     if (owners === undefined) {
       warn(line, `tool result references unknown toolCallId \`${record.toolCallId}\``);
-    } else if (!owners.some((owner) => ancestors(record.parentId as string | null).has(owner))) {
+    } else if (!reaches(record.parentId as string | null, (id) => owners.includes(id))) {
       error(line, `tool result \`${record.toolCallId}\` is not on the same branch as its call`);
     }
   }
