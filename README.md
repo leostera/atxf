@@ -89,6 +89,19 @@ const transcript = pi.toAtxf(await Bun.file("session.jsonl").text());
 const rollout = codex.fromAtxf(transcript); // Codex can continue it; reading it back gives `transcript`
 ```
 
+### One session across agents
+
+The [Pi extension](packages/pi-atxf) and the [OpenCode plugin](packages/opencode-atxf) add `/atxf export`,
+`/atxf import` and `/atxf join <file>`. Agents that join the same file share one session: each pushes its turns
+when it finishes them and pulls the others' turns while it is idle.
+
+```sh
+pi install npm:@leostera/pi-atxf
+opencode plugin add @leostera/opencode-atxf
+```
+
+`bun run e2e` runs both with scripted models, in temporary directories.
+
 ## Roadmap
 
 - Conformance fixtures for the reference `buildContext` (SPEC §5).

@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["packages/*/src", "packages/*/test", "specs", "scripts"]
+  "include": ["packages/*/src", "packages/*/test", "packages/opencode-atxf/tui.ts", "specs", "scripts", "test"]
 }

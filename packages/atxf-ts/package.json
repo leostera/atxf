@@ -1,6 +1,6 @@
 {
   "name": "@leostera/atxf",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation",
   "license": "MIT",
   "author": "Leo Ostera",
@@ -71,6 +71,10 @@
     "./reconcile": {
       "types": "./dist/reconcile.d.ts",
       "default": "./dist/reconcile.js"
+    },
+    "./sync": {
+      "types": "./dist/sync.d.ts",
+      "default": "./dist/sync.js"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",

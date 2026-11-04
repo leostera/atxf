@@ -1,0 +1,36 @@
+{
+  "name": "@leostera/opencode-atxf",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for ATXF: export and import sessions, and join a session shared with other agents",
+  "license": "MIT",
+  "author": "Leo Ostera",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leostera/atxf.git",
+    "directory": "packages/opencode-atxf"
+  },
+  "homepage": "https://atxf.leostera.dev",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "atxf",
+    "transcripts",
+    "sessions"
+  ],
+  "type": "module",
+  "exports": {
+    "./tui": "./tui.ts"
+  },
+  "files": [
+    "tui.ts",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@leostera/atxf": "^0.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
