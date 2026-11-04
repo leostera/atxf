@@ -12,7 +12,7 @@ const toc = headings.filter((h) => h.depth === 2).map(({ slug, text }) => ({ slu
 
 <Document
   title="ATXF: Agent Transcript Exchange Format"
-  description="A JSON Schema and JSONL format for exchanging coding-agent session transcripts between Pi, Codex, Claude Code, OpenCode, Gemini CLI and other tools."
+  description="Every coding agent stores sessions in its own format, so a session is stuck in the agent that started it. ATXF is one transcript format for Pi, Codex, Claude Code, OpenCode and Gemini CLI that keeps branches, compaction and what the model saw, and converts back without loss."
   current="/"
   headings={toc}
 >
@@ -31,10 +31,16 @@ const toc = headings.filter((h) => h.depth === 2).map(({ slug, text }) => ({ slu
     ]}
   >
     <p>
-      ATXF records a coding-agent session as an append-only tree of JSON records: what the model saw, the settings
-      it ran under, and the events around it. It is designed to hold the session formats of Pi, Codex, Claude Code,
-      OpenCode and Gemini CLI without flattening their branches, rewinds or compaction, and to carry each source
-      record verbatim so conversions can round-trip.
+      Every coding agent keeps its sessions in its own format, so a session is stuck in the agent that started it.
+      Moving it to another agent means starting over, converting it flattens the branches, rewinds and compaction
+      that decide what the model saw, and once shared, nothing shows whether it was edited or whether two copies of
+      it have diverged. Every viewer, eval and search tool has to learn every format.
+    </p>
+    <p class="mt-4">
+      ATXF is one format for all of them. A session is an append-only <strong>tree</strong> of JSON records from which
+      a consumer rebuilds exactly what the model saw. Each record carries the <strong>native</strong> records it came
+      from, so conversions round-trip byte for byte. Optional <strong>hashes</strong> make a transcript
+      tamper-evident, and <strong>reconciliation</strong> merges copies that were continued in different places.
     </p>
   </RfcHeader>
   <Content />

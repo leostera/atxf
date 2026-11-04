@@ -2,6 +2,30 @@
 
 **Status:** draft. The key words MUST, SHOULD and MAY are used as in RFC 2119.
 
+## Introduction
+
+### The problem
+
+Every coding agent keeps its sessions in its own format: Pi and Claude Code write different JSONL trees, Codex writes rollouts, OpenCode exports a JSON document, Gemini CLI writes its own JSONL. A session is locked into the agent that started it, and everything that wants to read sessions has to learn every format:
+
+- **Moving a session to another agent loses it.** There is no common format to convert through, so continuing a Claude Code session in Codex, or a Pi session in OpenCode, means starting over. Converting directly between each pair of agents does not scale, and every format change breaks the converters.
+- **Flattening loses what the model saw.** Sessions are not lists of messages. They branch when a user rewinds or edits, they compact old turns into summaries, they split or merge tool calls and results differently, and they carry reasoning that only the provider that produced it can read back. A converter that flattens all of this into chat messages gets the model's context wrong.
+- **Converting is one-way.** Whatever a common format cannot express is lost on the way in, so the original agent can no longer continue a session that went through it.
+- **Transcripts cannot be trusted once shared.** A transcript handed over for a review, a bug report or an audit can be edited or truncated without a trace.
+- **One session cannot continue in two places.** When a session is copied and continued on two machines or in two agents, the copies diverge, and nothing can merge them back.
+- **Every tool parses every format.** Viewers, evals, analytics and search each reimplement readers for each agent, and each gets the edge cases wrong in its own way.
+
+### The approach
+
+ATXF is one file format for all of them:
+
+- A session is an append-only **tree** of JSON records, with an active leaf, so branches, rewinds and edits survive (§4).
+- A consumer rebuilds exactly **what the model saw** from the tree, including compaction and context edits, by one defined procedure (§5). Provider-specific reasoning travels as opaque **replay data**, sent back only to the provider it came from (§10).
+- Every record can carry the **native records** it was read from, and converters obey four laws, so a session converted to ATXF and back is byte for byte the same, and a session written for another agent comes back unchanged (§11).
+- **Fidelity** declares what a producer could not capture, so missing data reads as unknown rather than empty (§15).
+- Optional **hashes and seals** make a transcript tamper-evident and let a reader prove that a record belongs to it (§17).
+- **Reconciliation** merges copies of one session that were continued separately into one transcript that keeps every record of every copy (§18).
+
 The JSON Schema in [`schema/v0.1/atxf.schema.json`](schema/v0.1/atxf.schema.json) defines the shape of each record. This document defines everything a per-line schema cannot express: ordering, references, and how a consumer reconstructs model context and session state.
 
 ## 1. Model
