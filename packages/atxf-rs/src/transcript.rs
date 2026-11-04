@@ -89,6 +89,27 @@ impl Transcript {
         Ok(Self { header: header.clone(), records })
     }
 
+    /// `from_value` for a value the caller no longer needs, moving the records out of it.
+    pub fn from_value_owned(value: Value) -> Result<Self, Error> {
+        let Value::Object(mut map) = value else {
+            return Err(Error::new("a carried transcript needs a `header` object"));
+        };
+        let Some(Value::Object(header)) = map.shift_remove("header") else {
+            return Err(Error::new("a carried transcript needs a `header` object"));
+        };
+        let Some(Value::Array(records)) = map.shift_remove("records") else {
+            return Err(Error::new("a carried transcript needs a `records` array"));
+        };
+        let records = records
+            .into_iter()
+            .map(|r| match r {
+                Value::Object(record) => Ok(record),
+                _ => Err(Error::new("every carried record must be an object")),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { header, records })
+    }
+
     /// The JSON form, `{header, records}`.
     pub fn to_value(&self) -> Value {
         let mut map = Map::new();

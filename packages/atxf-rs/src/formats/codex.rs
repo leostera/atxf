@@ -162,7 +162,7 @@ impl FormatSpec for Codex {
         Decoded { header, records: tree.records }
     }
 
-    fn encode(&self, transcript: &Transcript) -> Vec<Encoded> {
+    fn encode(&self, transcript: &Transcript, _session_id: Option<&str>) -> Vec<Encoded> {
         encode(transcript)
     }
 
@@ -186,12 +186,10 @@ impl FormatSpec for Codex {
         out
     }
 
-    fn detach(&self, units: &[Unit]) -> Option<(Value, Vec<Unit>)> {
+    fn detach(&self, units: &mut Vec<Unit>) -> Option<Value> {
         let index =
             units.iter().position(|u| u.value.is("type", "atxf") && u.value.obj("payload").and_then(|p| p.obj("transcript")).is_some())?;
-        let transcript = units[index].value.obj("payload")?.get("transcript")?.clone();
-        let rest = units.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, u)| u.clone()).collect();
-        Some((transcript, rest))
+        units.remove(index).value.get_mut("payload")?.as_object_mut()?.shift_remove("transcript")
     }
 }
 

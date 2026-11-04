@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::json::{Value, cmp_utf16, number_to_string, write_string};
+use crate::json::{Map, Value, cmp_utf16, number_to_string, write_string};
 
 /// RFC 8785 (JCS) canonical JSON: object keys sorted by UTF-16 code units, no whitespace, ECMAScript number and
 /// string serialization. Non-finite numbers cannot occur in parsed JSON.
@@ -10,6 +10,16 @@ pub fn canonical_json(value: &Value) -> String {
     let mut out = String::new();
     write(&mut out, value);
     out
+}
+
+/// Appends the canonical JSON of `value` to `out`.
+pub fn write_canonical(out: &mut String, value: &Value) {
+    write(out, value);
+}
+
+/// Appends the canonical JSON of the object `map` without its key `skip`, as if that key were removed first.
+pub fn write_canonical_object_without(out: &mut String, map: &Map, skip: &str) {
+    write_object(out, map, Some(skip));
 }
 
 fn write(out: &mut String, value: &Value) {
@@ -28,30 +38,38 @@ fn write(out: &mut String, value: &Value) {
             }
             out.push(']');
         }
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort_by(|a, b| cmp_utf16(a, b));
-            out.push('{');
-            for (i, key) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_string(out, key);
-                out.push(':');
-                write(out, &map[key]);
-            }
-            out.push('}');
-        }
+        Value::Object(map) => write_object(out, map, None),
     }
+}
+
+fn write_object(out: &mut String, map: &Map, skip: Option<&str>) {
+    let mut entries: Vec<(&String, &Value)> = map.iter().filter(|(key, _)| Some(key.as_str()) != skip).collect();
+    entries.sort_by(|(a, _), (b, _)| cmp_utf16(a, b));
+    out.push('{');
+    for (i, (key, value)) in entries.into_iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_string(out, key);
+        out.push(':');
+        write(out, value);
+    }
+    out.push('}');
 }
 
 /// Lowercase hex SHA-256 of the UTF-8 bytes of `text`.
 pub fn sha256(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
+    sha256_hex(text.as_bytes())
+}
+
+/// Lowercase hex SHA-256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);
     for byte in digest {
-        hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        hex.push(char::from_digit(u32::from(byte & 0xf), 16).unwrap_or('0'));
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0xf)]));
     }
     hex
 }

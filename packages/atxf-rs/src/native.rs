@@ -80,11 +80,41 @@ pub struct JsonDocument {
 }
 
 impl JsonDocument {
+    /// `JSON.stringify({...head, [items]: [the other units]}, null, indent)` and the line ending, written straight
+    /// from the units: the head's keys in JavaScript property order, then the items.
     fn build(&self, units: &[Unit]) -> Option<String> {
         let head = units.first()?.value.as_object()?;
-        let items = Value::Array(units[1..].iter().map(|u| u.value.clone()).collect());
-        let doc = Obj::new().spread(head).set(self.items, items).value();
-        Some(format!("{}{}", json::stringify_pretty(&doc, self.indent), self.eol))
+        let indent = Some(self.indent);
+        let mut out = String::new();
+        out.push('{');
+        for (key, value) in json::entries(head) {
+            json::newline(&mut out, indent, 1);
+            json::write_string(&mut out, key);
+            out.push_str(": ");
+            json::write_value(&mut out, value, indent, 1);
+            out.push(',');
+        }
+        json::newline(&mut out, indent, 1);
+        json::write_string(&mut out, self.items);
+        out.push_str(": ");
+        if units.len() == 1 {
+            out.push_str("[]");
+        } else {
+            out.push('[');
+            for (i, unit) in units[1..].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json::newline(&mut out, indent, 2);
+                json::write_value(&mut out, &unit.value, indent, 2);
+            }
+            json::newline(&mut out, indent, 1);
+            out.push(']');
+        }
+        json::newline(&mut out, indent, 0);
+        out.push('}');
+        out.push_str(self.eol);
+        Some(out)
     }
 }
 
@@ -93,17 +123,21 @@ impl Framing for JsonDocument {
         let Ok(doc) = json::parse(text) else {
             return vec![Unit { value: Value::Null, raw: text.to_string() }];
         };
-        let Some(map) = doc.as_object().filter(|m| m.arr(self.items).is_some()) else {
-            return vec![Unit { value: doc, raw: text.to_string() }];
+        let mut map = match doc {
+            Value::Object(map) if map.arr(self.items).is_some() => map,
+            doc => return vec![Unit { value: doc, raw: text.to_string() }],
         };
+        // The head keeps the document's other keys in JavaScript property order; values are moved, not copied.
+        let order: Vec<String> = json::keys(&map).into_iter().filter(|key| *key != self.items).cloned().collect();
+        let Some(Value::Array(items)) = map.shift_remove(self.items) else { unreachable!("checked to be an array above") };
         let mut head = Map::new();
-        for (key, value) in json::entries(map) {
-            if key != self.items {
-                head.insert(key.clone(), value.clone());
+        for key in order {
+            if let Some(value) = map.shift_remove(&key) {
+                head.insert(key, value);
             }
         }
         let mut units = vec![Unit { value: Value::Object(head), raw: String::new() }];
-        units.extend(map.arr(self.items).into_iter().flatten().map(|v| Unit { value: v.clone(), raw: String::new() }));
+        units.extend(items.into_iter().map(|value| Unit { value, raw: String::new() }));
         if self.build(&units).as_deref() != Some(text) {
             units[0].raw = text.to_string();
         }

@@ -203,16 +203,19 @@ fn check_references(records: &[(usize, Map)], diagnostics: &mut Vec<Diagnostic>)
     // Tool call id → the assistant messages holding it. Ids are unique along a path, not across branches (SPEC §3).
     let mut tool_call_owner: HashMap<String, Vec<String>> = HashMap::new();
 
-    let ancestors = |parents: &HashMap<String, Option<String>>, id: Option<&str>| -> HashSet<String> {
-        let mut seen = HashSet::new();
-        let mut cursor = id.map(str::to_string);
-        while let Some(c) = cursor {
-            if !seen.insert(c.clone()) {
-                break;
+    // Whether the path up from `id` (itself included) reaches a record `found` accepts. Walks only as far as it must:
+    // a tool result's call is usually a step or two up. A path never revisits a record unless ids repeat, and then
+    // it stops after as many steps as there are records.
+    let reaches = |parents: &HashMap<String, Option<String>>, id: Option<&str>, found: &dyn Fn(&str) -> bool| -> bool {
+        let mut cursor = id;
+        for _ in 0..=parents.len() {
+            let Some(c) = cursor else { return false };
+            if found(c) {
+                return true;
             }
-            cursor = parents.get(&c).cloned().flatten();
+            cursor = parents.get(c).and_then(|p| p.as_deref());
         }
-        seen
+        false
     };
 
     for (line, record) in &records[1..] {
@@ -239,8 +242,9 @@ fn check_references(records: &[(usize, Map)], diagnostics: &mut Vec<Diagnostic>)
                         }
                         let call = block.field("id").map(json::to_js_string).unwrap_or_else(|| "undefined".into());
                         let owners = tool_call_owner.entry(call.clone()).or_default();
-                        let path = ancestors(&parents, record.parent_id());
-                        if owners.iter().any(|o| *o == id || path.contains(o)) {
+                        if !owners.is_empty()
+                            && (owners.contains(&id) || reaches(&parents, record.parent_id(), &|c| owners.iter().any(|o| o == c)))
+                        {
                             push_error(ordered, line, format!("duplicate tool_call id `{call}` on one path"));
                         }
                         owners.push(id.clone());
@@ -251,8 +255,7 @@ fn check_references(records: &[(usize, Map)], diagnostics: &mut Vec<Diagnostic>)
                     match tool_call_owner.get(&call) {
                         None => warn(ordered, line, format!("tool result references unknown toolCallId `{call}`")),
                         Some(owners) => {
-                            let path = ancestors(&parents, record.parent_id());
-                            if !owners.iter().any(|o| path.contains(o)) {
+                            if !reaches(&parents, record.parent_id(), &|c| owners.iter().any(|o| o == c)) {
                                 push_error(ordered, line, format!("tool result `{call}` is not on the same branch as its call"));
                             }
                         }
@@ -262,7 +265,7 @@ fn check_references(records: &[(usize, Map)], diagnostics: &mut Vec<Diagnostic>)
             "compaction" => {
                 if let (true, Some(kept)) = (record.is("strategy", "summary"), record.str("firstKeptId")) {
                     require_node(ordered, &nodes, line, "firstKeptId", record.field("firstKeptId"));
-                    if !ancestors(&parents, record.parent_id()).contains(kept) {
+                    if !reaches(&parents, record.parent_id(), &|c| c == kept) {
                         push_error(ordered, line, format!("firstKeptId `{kept}` must be an ancestor of the compaction"));
                     }
                 }

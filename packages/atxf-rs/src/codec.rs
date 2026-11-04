@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::canonical::{canonical_json, sha256};
-use crate::integrity::{add_integrity, without_hash};
+use crate::integrity::{add_integrity_owned, without_hash};
 use crate::json::{Get, Map, Obj, Value};
 use crate::native::{Framing, Unit, is_pure_native, native_units};
 use crate::transcript::{Error, Record, Transcript};
@@ -32,7 +32,15 @@ pub trait Converter: Sync {
     /// Writes a transcript as native session text. With `carry: false`, writes only the agent's own records for the
     /// active context, without marks or the carried transcript: a clean file that no longer round-trips.
     #[allow(clippy::wrong_self_convention)] // Named as in the TypeScript API.
-    fn from_atxf(&self, transcript: &Transcript, carry: bool) -> Result<String, Error>;
+    fn from_atxf(&self, transcript: &Transcript, carry: bool) -> Result<String, Error> {
+        self.from_atxf_for(transcript, carry, None)
+    }
+    /// Like `from_atxf`, for a file that will be loaded as the native session `session_id` when that is not the
+    /// transcript's own session, e.g. when an agent replaces one of its sessions with a shared transcript. Formats
+    /// whose ids must be unique across sessions derive their ids from it. `None` means the transcript's
+    /// `source.sessionId`, else its id. (`sessionId` of `FromAtxfOptions` in the TypeScript API.)
+    #[allow(clippy::wrong_self_convention)]
+    fn from_atxf_for(&self, transcript: &Transcript, carry: bool, session_id: Option<&str>) -> Result<String, Error>;
 }
 
 /// A native record written for an ATXF transcript, with the ATXF record it stands for (`None` for one with no
@@ -68,16 +76,18 @@ pub trait FormatSpec: Sync {
     /// transcript: skip them, but resolve references to them through their ATXF ids. Every other unit must end up
     /// in exactly one returned record's `native`, in order.
     fn decode(&self, units: &[Unit], context: DecodeContext<'_>) -> Decoded;
-    /// The format's records for the transcript's active context.
-    fn encode(&self, transcript: &Transcript) -> Vec<Encoded>;
+    /// The format's records for the transcript's active context. `session_id` is the native session the records
+    /// will be loaded as (see `Converter::from_atxf_for`).
+    fn encode(&self, transcript: &Transcript, session_id: Option<&str>) -> Vec<Encoded>;
     /// The value with a mark naming the ATXF record it stands for.
     fn mark(&self, value: Value, source: Option<&str>) -> Value;
     /// The mark's ATXF id: `Some(Some(id))`, `Some(None)` for a mark without one, `None` for an unmarked record.
     fn mark_of(&self, value: &Value) -> Option<Option<String>>;
     /// Adds the carried transcript to the encoded (and marked) records.
     fn attach(&self, values: Vec<Value>, transcript: &Transcript) -> Vec<Value>;
-    /// Finds the carried transcript and returns the units without it.
-    fn detach(&self, units: &[Unit]) -> Option<(Value, Vec<Unit>)>;
+    /// Finds the carried transcript, takes it out of `units` and returns it. The units left are those an unmarked
+    /// file would have, with any mark in place.
+    fn detach(&self, units: &mut Vec<Unit>) -> Option<Value>;
 }
 
 /// The digest of a native file, recorded in `fidelity.nativeDigest` of the transcript read from it.
@@ -119,16 +129,16 @@ impl<T: FormatSpec> Converter for T {
     }
 
     fn to_atxf(&self, text: &str, integrity: bool) -> Result<Transcript, Error> {
-        let units = self.framing().parse(text);
-        let Some((carried, units)) = self.detach(&units) else {
+        let mut units = self.framing().parse(text);
+        let Some(carried) = self.detach(&mut units) else {
             let decoded = self.decode(&units, DecodeContext { known: HashMap::new(), base: None, ids: IdAllocator::default() });
             let fidelity =
                 Obj::new().spread(decoded.header.obj("fidelity").unwrap_or(&Map::new())).set("nativeDigest", native_digest(text)).value();
             let header = Obj::new().spread(&decoded.header).set("fidelity", fidelity).build();
             let transcript = Transcript { header, records: decoded.records };
-            return if integrity { add_integrity(&transcript, None) } else { Ok(transcript) };
+            return if integrity { add_integrity_owned(transcript, None) } else { Ok(transcript) };
         };
-        let base = Transcript::from_value(&carried)?;
+        let base = Transcript::from_value_owned(carried)?;
         let mut known = HashMap::new();
         for (index, unit) in units.iter().enumerate() {
             if let Some(mark) = self.mark_of(&unit.value) {
@@ -145,15 +155,19 @@ impl<T: FormatSpec> Converter for T {
         }
         let ids = IdAllocator::new(base.records.iter().map(|r| r.id().to_string()));
         let decoded = self.decode(&units, DecodeContext { known, base: Some(&base), ids });
-        let mut records = base.records.clone();
+        let Transcript { header, mut records } = base;
         records.extend(decoded.records);
-        let transcript = Transcript { header: base.header.clone(), records };
-        if base.header.has("integrity") { add_integrity(&transcript, None) } else { Ok(transcript) }
+        let integrity = header.has("integrity");
+        let transcript = Transcript { header, records };
+        if integrity { add_integrity_owned(transcript, None) } else { Ok(transcript) }
     }
 
-    fn from_atxf(&self, transcript: &Transcript, carry: bool) -> Result<String, Error> {
+    fn from_atxf_for(&self, transcript: &Transcript, carry: bool, session_id: Option<&str>) -> Result<String, Error> {
         let framing = self.framing();
-        if carry && is_pure_native(transcript, T::AGENT) {
+        // Native records hold the ids of the session they were read from, so they stand for the transcript only
+        // when the file is loaded as that same session.
+        let same_session = session_id.is_none() || session_id == transcript.header.obj("source").and_then(|source| source.str("sessionId"));
+        if carry && same_session && is_pure_native(transcript, T::AGENT) {
             // Native records alone stand for the transcript only if reading them back gives it: a reconciled
             // transcript holds only native records too, but its branches may not fit one file of a linear format.
             // Reading is deterministic, so printing the very file the transcript was read from is enough.
@@ -166,7 +180,7 @@ impl<T: FormatSpec> Converter for T {
                 return Ok(text);
             }
         }
-        let encoded = self.encode(transcript);
+        let encoded = self.encode(transcript, session_id);
         let values = if carry {
             let marked = encoded.into_iter().map(|e| self.mark(e.value, e.source.as_deref())).collect();
             self.attach(marked, transcript)

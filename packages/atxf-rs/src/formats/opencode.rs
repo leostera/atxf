@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use super::{Node, obj_or_empty, opt_str, or_else};
+use crate::canonical::sha256;
 use crate::codec::{DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, carried_value, mark_id};
 use crate::context::{BuildContextOptions, build_context};
 use crate::equivalence::content_text;
@@ -165,8 +166,8 @@ impl FormatSpec for OpenCode {
         Decoded { header, records: tree.records }
     }
 
-    fn encode(&self, transcript: &Transcript) -> Vec<Encoded> {
-        encode(transcript)
+    fn encode(&self, transcript: &Transcript, session_id: Option<&str>) -> Vec<Encoded> {
+        encode(transcript, session_id)
     }
 
     fn mark(&self, value: Value, source: Option<&str>) -> Value {
@@ -201,22 +202,13 @@ impl FormatSpec for OpenCode {
         out
     }
 
-    fn detach(&self, units: &[Unit]) -> Option<(Value, Vec<Unit>)> {
-        let head = units.first()?.value.as_object()?;
-        let info = head.obj("info")?;
-        let metadata = info.obj("metadata")?;
-        let atxf = metadata.obj("atxf")?;
+    fn detach(&self, units: &mut Vec<Unit>) -> Option<Value> {
+        let head = units.first_mut()?;
+        let atxf = head.value.get_mut("info")?.get_mut("metadata")?.get_mut("atxf")?.as_object_mut()?;
         atxf.obj("transcript")?;
-        let transcript = atxf["transcript"].clone();
-        let mut mark = atxf.clone();
-        mark.shift_remove("transcript");
-        let value = Obj::new()
-            .spread(head)
-            .set("info", Obj::new().spread(info).set("metadata", Obj::new().spread(metadata).set("atxf", Value::Object(mark))))
-            .value();
-        let mut rest = units.to_vec();
-        rest[0] = Unit { value, raw: String::new() };
-        Some((transcript, rest))
+        let transcript = atxf.shift_remove("transcript")?;
+        head.raw = String::new();
+        Some(transcript)
     }
 }
 
@@ -438,13 +430,30 @@ fn finish(stop: Option<&Value>) -> Option<&'static str> {
     })
 }
 
-fn encode(transcript: &Transcript) -> Vec<Encoded> {
+/// OpenCode session ids start with `ses`.
+fn session_id(id: &str) -> String {
+    if id.starts_with("ses") { id.to_string() } else { format!("ses_{id}") }
+}
+
+/// OpenCode message ids are unique across all of its sessions, not just within one, and the same transcript may be
+/// loaded into several sessions. So every message id is scoped to the session it is written for, by a short digest
+/// of that session's id. The ids stay deterministic, so writing the same transcript for the same session again gives
+/// the same ids. Reading the file back restores the ATXF ids from the marks.
+fn message_scope(session: &str) -> String {
+    sha256(&format!("atxf/opencode/session\n{session}"))[..12].to_string()
+}
+
+fn encode(transcript: &Transcript, session_id_option: Option<&str>) -> Vec<Encoded> {
     let context = build_context(transcript, &BuildContextOptions::default());
     let header = &transcript.header;
     let header_time = header.str("time").unwrap_or("");
     let times: HashMap<&str, &str> = transcript.records.iter().map(|r| (r.id(), r.time())).collect();
+    let session = session_id(
+        session_id_option.or_else(|| header.obj("source").and_then(|s| s.str("sessionId"))).or_else(|| header.str("id")).unwrap_or(""),
+    );
+    let scope = message_scope(&session);
     let mut ids = IdAllocator::default();
-    let mut msg_id = |source: &str| if source.starts_with("msg_") { ids.take(source) } else { ids.take(&format!("msg_{source}")) };
+    let mut msg_id = |source: &str| ids.take(&format!("msg_{scope}_{}", source.strip_prefix("msg_").unwrap_or(source)));
     let mut results: Vec<(String, &Map)> = Vec::new();
     for message in &context.messages {
         if let (true, Some(call)) = (message.body.is("role", "tool"), message.body.str("toolCallId"))
@@ -459,7 +468,7 @@ fn encode(transcript: &Transcript) -> Vec<Encoded> {
 
     let last_time = transcript.records.last().map_or(header_time, |r| r.time());
     let info = Obj::new()
-        .set("id", or_else(header.obj("source").and_then(|s| s.field("sessionId")), || header.field("id").cloned().unwrap_or(Value::Null)))
+        .set("id", session.as_str())
         .set("projectID", "atxf")
         .opt("title", header.field("title").cloned())
         .set("cost", 0)
@@ -504,7 +513,12 @@ fn encode(transcript: &Transcript) -> Vec<Encoded> {
             // A compaction starts the context; a summary later on can only be a user message.
             let summary = content_text(body.field("content"));
             let value = if index == 0 {
-                base.clone().set("type", "compaction").set("status", "completed").set("reason", "auto").set("summary", summary)
+                base.clone()
+                    .set("type", "compaction")
+                    .set("status", "completed")
+                    .set("reason", "auto")
+                    .set("summary", summary)
+                    .set("recent", "")
             } else {
                 user(summary)
             };
@@ -589,6 +603,8 @@ fn encode(transcript: &Transcript) -> Vec<Encoded> {
                 });
                 let value = base
                     .clone()
+                    // OpenCode imports only completed assistant messages.
+                    .set("time", Obj::new().set("created", created(source)).set("completed", created(source)))
                     .set("type", "assistant")
                     .set("agent", "build")
                     .set(

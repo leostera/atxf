@@ -59,7 +59,7 @@ impl FormatSpec for Pi {
         Decoded { header, records: tree.records }
     }
 
-    fn encode(&self, transcript: &Transcript) -> Vec<Encoded> {
+    fn encode(&self, transcript: &Transcript, _session_id: Option<&str>) -> Vec<Encoded> {
         encode(transcript)
     }
 
@@ -80,23 +80,16 @@ impl FormatSpec for Pi {
         out
     }
 
-    fn detach(&self, units: &[Unit]) -> Option<(Value, Vec<Unit>)> {
+    fn detach(&self, units: &mut Vec<Unit>) -> Option<Value> {
         detach_from_atxf_key(units)
     }
 }
 
 /// Finds a unit whose `atxf` key carries the transcript, and returns the transcript and the units with the mark
 /// left in place. Shared by the formats that carry the transcript on a header line (Pi, Gemini CLI).
-pub(super) fn detach_from_atxf_key(units: &[Unit]) -> Option<(Value, Vec<Unit>)> {
+pub(super) fn detach_from_atxf_key(units: &mut [Unit]) -> Option<Value> {
     let index = units.iter().position(|u| u.value.obj("atxf").and_then(|a| a.obj("transcript")).is_some())?;
-    let value = units[index].value.as_object()?;
-    let atxf = value.obj("atxf")?;
-    let transcript = atxf.get("transcript")?.clone();
-    let mut mark = atxf.clone();
-    mark.shift_remove("transcript");
-    let mut rest = units.to_vec();
-    rest[index] = Unit { value: Obj::new().spread(value).set("atxf", Value::Object(mark)).value(), raw: units[index].raw.clone() };
-    Some((transcript, rest))
+    units[index].value.get_mut("atxf")?.as_object_mut()?.shift_remove("transcript")
 }
 
 fn session_header(session: &Map, native: Option<Map>) -> Map {

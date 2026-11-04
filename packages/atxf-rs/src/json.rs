@@ -60,7 +60,8 @@ pub fn stringify_pretty(value: &Value, indent: &str) -> String {
     out
 }
 
-fn write_value(out: &mut String, value: &Value, indent: Option<&str>, level: usize) {
+/// Appends `JSON.stringify` of `value` as it appears nested `level` deep, with `indent` per level when given.
+pub fn write_value(out: &mut String, value: &Value, indent: Option<&str>, level: usize) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -106,7 +107,8 @@ fn write_value(out: &mut String, value: &Value, indent: Option<&str>, level: usi
     }
 }
 
-fn newline(out: &mut String, indent: Option<&str>, level: usize) {
+/// The line break and indentation before a nested item at `level`, when indenting.
+pub fn newline(out: &mut String, indent: Option<&str>, level: usize) {
     if let Some(indent) = indent {
         out.push('\n');
         for _ in 0..level {
@@ -117,23 +119,59 @@ fn newline(out: &mut String, indent: Option<&str>, level: usize) {
 
 /// A JSON string literal as `JSON.stringify` writes it.
 pub fn write_string(out: &mut String, s: &str) {
+    out.reserve(s.len() + 2);
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
+    // Only ASCII bytes are ever escaped, and UTF-8 never uses them inside a multi-byte character, so the text
+    // between two escaped bytes is always whole characters: copy it in one go.
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip eight bytes at a time while none of them needs escaping.
+        if i + 8 <= bytes.len() {
+            let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap_or([0; 8]));
+            if !needs_escape(word) {
+                i += 8;
+                continue;
             }
-            c => out.push(c),
         }
+        let byte = bytes[i];
+        let escape = match byte {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            0x08 => "\\b",
+            0x0c => "\\f",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            0x00..=0x1f => "",
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        out.push_str(&s[start..i]);
+        if escape.is_empty() {
+            let _ = write!(out, "\\u{byte:04x}");
+        } else {
+            out.push_str(escape);
+        }
+        i += 1;
+        start = i;
     }
+    out.push_str(&s[start..]);
     out.push('"');
+}
+
+/// Whether any of the eight bytes in `word` may be a control character, a quote or a backslash. SWAR tests can
+/// report a byte that is none of these (a borrow spills into the next lane), but never miss one, so a `true` only
+/// sends the bytes through the exact check one at a time.
+fn needs_escape(word: u64) -> bool {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let below = |w: u64, n: u64| w.wrapping_sub(ONES * n) & !w & HIGH;
+    let zero = |w: u64| w.wrapping_sub(ONES) & !w & HIGH;
+    (below(word, 0x20) | zero(word ^ (ONES * u64::from(b'"'))) | zero(word ^ (ONES * u64::from(b'\\')))) != 0
 }
 
 /// `Number.prototype.toString` for a double. Non-finite numbers are written as `null`, as `JSON.stringify` does.
@@ -354,5 +392,45 @@ mod tests {
         let mut v = vec!["😀", "\u{ffff}", "z", "é"];
         v.sort_by(|a, b| cmp_utf16(a, b));
         assert_eq!(v, vec!["z", "é", "😀", "\u{ffff}"]);
+    }
+}
+
+#[cfg(test)]
+mod write_string_tests {
+    use super::write_string;
+
+    /// `write_string` against the obvious one-character-at-a-time version, across chunk boundaries.
+    #[test]
+    fn write_string_escapes_like_the_reference() {
+        fn reference(s: &str) -> String {
+            let mut out = String::from("\"");
+            for c in s.chars() {
+                match c {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\u{8}' => out.push_str("\\b"),
+                    '\u{c}' => out.push_str("\\f"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+        let pieces = ["a", "\"", "\\", "\n", "\u{1}", "\u{1f}", " ", "!", "é", "日本", "😀", "\u{7f}", "#", "]", "\t"];
+        let mut seed = 7u64;
+        for _ in 0..5000 {
+            let mut s = String::new();
+            for _ in 0..(seed % 40) {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                s.push_str(pieces[(seed >> 33) as usize % pieces.len()]);
+            }
+            let mut out = String::new();
+            write_string(&mut out, &s);
+            assert_eq!(out, reference(&s), "{s:?}");
+        }
     }
 }

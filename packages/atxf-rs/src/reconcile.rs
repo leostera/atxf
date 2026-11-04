@@ -13,9 +13,9 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use crate::canonical::{canonical_json, sha256};
-use crate::integrity::{Hash, IntegrityProblem, REFERENCE_FIELDS, SealAt, add_integrity, verify_integrity, without_hash};
-use crate::json::{Get, Map, Obj, Value, cmp_utf16};
+use crate::canonical::{canonical_json, sha256, sha256_hex, write_canonical};
+use crate::integrity::{Hash, IntegrityProblem, REFERENCE_FIELDS, SealAt, add_integrity_owned, verify_integrity, without_hash};
+use crate::json::{Get, Map, Obj, Value, cmp_utf16, write_string};
 use crate::time;
 use crate::transcript::{Error, Record, Transcript};
 
@@ -38,9 +38,10 @@ pub struct ReconcileResult {
 }
 
 #[derive(Clone, Debug)]
-struct Keyed {
+struct Keyed<'a> {
     key: Hash,
-    record: Map,
+    /// The record as in its copy, `hash` included.
+    record: &'a Map,
     /// Reference field → the referenced record's key; `native.of` is under `of`.
     refs: Vec<(String, Option<Hash>)>,
     time: f64,
@@ -48,8 +49,8 @@ struct Keyed {
 
 /// The reconciliation key of every record of a copy, except seals: a digest of the record's content without its
 /// id, its hash or the ids it references, and of the keys of the records it references.
-fn key_copy(copy: &Transcript) -> Result<Vec<Keyed>, Error> {
-    let mut key_of: HashMap<String, Hash> = HashMap::new();
+fn key_copy(copy: &Transcript) -> Result<Vec<Keyed<'_>>, Error> {
+    let mut key_of: HashMap<&str, Hash> = HashMap::new();
     let mut out = Vec::new();
     for (index, record) in copy.records.iter().enumerate() {
         if key_of.contains_key(record.id()) {
@@ -58,50 +59,87 @@ fn key_copy(copy: &Transcript) -> Result<Vec<Keyed>, Error> {
         if record.kind() == "seal" {
             continue;
         }
-        let unhashed = without_hash(record);
-        let mut content = unhashed.clone();
-        content.insert("id".into(), Value::String(String::new()));
-        let mut refs: Vec<(String, Option<Hash>)> = Vec::new();
         let resolve = |field: &str, id: &str| {
             key_of
                 .get(id)
                 .cloned()
                 .ok_or_else(|| Error::new(format!("a copy of `{}`, record {}: {field} `{id}` has no earlier record", copy.id(), index + 1)))
         };
+        // The content is the record without `hash`, with its id, the ids it references and `native.of` blanked.
+        let mut refs: Vec<(String, Option<Hash>)> = Vec::new();
+        let mut content: Vec<(&str, Field<'_>)> = Vec::with_capacity(record.len() + 1);
         for field in REFERENCE_FIELDS {
-            match unhashed.field(field) {
+            match record.field(field) {
                 Some(Value::Null) => refs.push((field.to_string(), None)),
-                Some(Value::String(id)) => {
-                    refs.push((field.to_string(), Some(resolve(field, id)?)));
-                    content.insert(field.to_string(), Value::String(String::new()));
-                }
+                Some(Value::String(id)) => refs.push((field.to_string(), Some(resolve(field, id)?))),
                 _ => {}
             }
         }
-        if let Some(native) = unhashed.obj("native")
+        if let Some(native) = record.obj("native")
             && let Some(of) = native.field("of")
         {
             let of = of
                 .as_str()
                 .ok_or_else(|| Error::new(format!("a copy of `{}`, record {}: native.of is not an id", copy.id(), index + 1)))?;
             refs.push(("of".to_string(), Some(resolve("native.of", of)?)));
-            content.insert("native".into(), Obj::new().spread(native).set("of", "").value());
+        }
+        for (key, value) in record {
+            content.push(match (key.as_str(), value) {
+                ("hash", _) => continue,
+                ("id", _) => (key, Field::Blank),
+                (field, Value::String(_)) if REFERENCE_FIELDS.contains(&field) => (key, Field::Blank),
+                ("native", Value::Object(native)) if native.has("of") => (key, Field::ObjectBlanking(native, "of")),
+                _ => (key, Field::Value(value)),
+            });
+        }
+        if !record.has("id") {
+            content.push(("id", Field::Blank));
         }
         let mut ref_map = Map::new();
         for (field, key) in &refs {
             ref_map.insert(field.clone(), key.clone().map_or(Value::Null, Value::String));
         }
-        let key = format!(
-            "sha256:{}",
-            sha256(&format!(
-                "{DOMAIN}{}",
-                canonical_json(&Obj::new().set("content", Value::Object(content)).set("refs", Value::Object(ref_map)).value())
-            ))
-        );
-        key_of.insert(record.id().to_string(), key.clone());
-        out.push(Keyed { key, record: unhashed, refs, time: time::parse(record.time()).unwrap_or(f64::NEG_INFINITY) });
+        // The canonical JSON of `{content, refs}`: its keys are already in order.
+        let mut text = String::from(DOMAIN);
+        text.push_str("{\"content\":");
+        write_fields(&mut text, content);
+        text.push_str(",\"refs\":");
+        write_canonical(&mut text, &Value::Object(ref_map));
+        text.push('}');
+        let key = format!("sha256:{}", sha256_hex(text.as_bytes()));
+        key_of.insert(record.id(), key.clone());
+        out.push(Keyed { key, record, refs, time: time::parse(record.time()).unwrap_or(f64::NEG_INFINITY) });
     }
     Ok(out)
+}
+
+/// A field of an object written as canonical JSON with some values replaced, without copying the object.
+enum Field<'a> {
+    Value(&'a Value),
+    /// The empty string.
+    Blank,
+    /// The object with its field named by the `&str` blanked.
+    ObjectBlanking(&'a Map, &'a str),
+}
+
+fn write_fields(out: &mut String, mut fields: Vec<(&str, Field<'_>)>) {
+    fields.sort_by(|(a, _), (b, _)| cmp_utf16(a, b));
+    out.push('{');
+    for (i, (key, field)) in fields.into_iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_string(out, key);
+        out.push(':');
+        match field {
+            Field::Value(value) => write_canonical(out, value),
+            Field::Blank => out.push_str("\"\""),
+            Field::ObjectBlanking(map, blank) => {
+                write_fields(out, map.iter().map(|(k, v)| (k.as_str(), if k == blank { Field::Blank } else { Field::Value(v) })).collect())
+            }
+        }
+    }
+    out.push('}');
 }
 
 /// The reconciliation keys of a transcript's records. Two copies are in sync when their sets of keys are equal.
@@ -131,7 +169,7 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
         .filter(|(_, p)| !p.is_empty())
         .collect();
 
-    let mut by_key: HashMap<Hash, Keyed> = HashMap::new();
+    let mut by_key: HashMap<Hash, Keyed<'_>> = HashMap::new();
     for copy in copies {
         for keyed in key_copy(copy)? {
             // The same record may have different ids in different copies: an earlier reconciliation renamed it, or
@@ -157,25 +195,25 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
     keys.sort_by(|a, b| cmp_utf16(a, b));
     let last = ordered.last().map_or_else(|| transcript.header.str("time").unwrap_or("").to_string(), |k| k.record.time().to_string());
     let seal_id = format!("seal~{}", &sha256(&keys.join("\n"))[..12]);
-    let sealed = add_integrity(&transcript, Some(SealAt { id: &seal_id, time: &last }))?;
+    let sealed = add_integrity_owned(transcript, Some(SealAt { id: &seal_id, time: &last }))?;
     Ok(ReconcileResult { transcript: sealed, renamed, problems })
 }
 
 /// Orders the heap so the earliest, then smallest key, pops first.
-struct Ready(Keyed);
+struct Ready<'a>(Keyed<'a>);
 
-impl PartialEq for Ready {
+impl PartialEq for Ready<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
-impl Eq for Ready {}
-impl PartialOrd for Ready {
+impl Eq for Ready<'_> {}
+impl PartialOrd for Ready<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for Ready {
+impl Ord for Ready<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reversed: BinaryHeap is a max-heap.
         other.0.time.total_cmp(&self.0.time).then_with(|| cmp_utf16(&other.0.key, &self.0.key))
@@ -183,7 +221,7 @@ impl Ord for Ready {
 }
 
 /// References first; among the records whose references are all written, the earliest, then the smallest key.
-fn topological_order(records: Vec<Keyed>) -> Vec<Keyed> {
+fn topological_order(records: Vec<Keyed<'_>>) -> Vec<Keyed<'_>> {
     let mut waiting: HashMap<Hash, usize> = HashMap::new();
     let mut dependents: HashMap<Hash, Vec<Hash>> = HashMap::new();
     for keyed in &records {
@@ -193,7 +231,7 @@ fn topological_order(records: Vec<Keyed>) -> Vec<Keyed> {
             dependents.entry(dep.clone()).or_default().push(keyed.key.clone());
         }
     }
-    let mut pending: HashMap<Hash, Keyed> = HashMap::new();
+    let mut pending: HashMap<Hash, Keyed<'_>> = HashMap::new();
     let mut ready = BinaryHeap::new();
     for keyed in records {
         if waiting[&keyed.key] == 0 {
@@ -220,7 +258,7 @@ fn topological_order(records: Vec<Keyed>) -> Vec<Keyed> {
 }
 
 /// The smallest key keeps a shared id; the others get `id~<key prefix>`, long enough to be unique.
-fn assign_ids(records: &[Keyed]) -> (HashMap<Hash, String>, Vec<Renamed>) {
+fn assign_ids(records: &[Keyed<'_>]) -> (HashMap<Hash, String>, Vec<Renamed>) {
     let mut by_id: Vec<(String, Vec<Hash>)> = Vec::new();
     let mut index: HashMap<&str, usize> = HashMap::new();
     for keyed in records {
@@ -256,8 +294,9 @@ fn assign_ids(records: &[Keyed]) -> (HashMap<Hash, String>, Vec<Renamed>) {
 }
 
 /// The record with its id and references in the result's ids.
-fn rewrite(keyed: &Keyed, ids: &HashMap<Hash, String>) -> Map {
+fn rewrite(keyed: &Keyed<'_>, ids: &HashMap<Hash, String>) -> Map {
     let mut record = keyed.record.clone();
+    record.shift_remove("hash");
     record.insert("id".into(), Value::String(ids[&keyed.key].clone()));
     for (field, key) in &keyed.refs {
         let id = key.as_ref().map_or(Value::Null, |k| Value::String(ids[k].clone()));

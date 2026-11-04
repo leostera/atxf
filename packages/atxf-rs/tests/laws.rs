@@ -20,11 +20,12 @@ fn read(path: &str) -> String {
     std::fs::read_to_string(repo().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
-const FIXTURES: [(&str, &str); 4] = [
+const FIXTURES: [(&str, &str); 5] = [
     ("claude-code", "fixtures/claude-code/harbor-hello.jsonl"),
     ("codex", "fixtures/codex/rollout-hand-built.jsonl"),
     ("gemini-cli", "fixtures/gemini-cli/session-hand-built.jsonl"),
     ("opencode", "fixtures/opencode/export-hand-built.json"),
+    ("opencode", "fixtures/opencode/export-2.0.20.json"),
 ];
 
 fn examples() -> Vec<(String, Transcript)> {
@@ -167,4 +168,50 @@ fn reconciling_sealed_copies_seals_the_result() {
 fn canonical_json_orders_integer_like_keys_as_strings() {
     let value: Value = serde_json::from_str(r#"{"b":1,"4":null,"":"","a":[{"z":1,"10":2}],"n":1e21}"#).unwrap();
     assert_eq!(atxf::canonical::canonical_json(&value), r#"{"":"","4":null,"a":[{"10":2,"z":1}],"b":1,"n":1e+21}"#);
+}
+
+/// A transcript from another agent with a model switch, under session `id`, with the same record ids every time.
+fn with_model_switch(id: &str) -> Transcript {
+    parse_transcript(&format!(
+        concat!(
+            r#"{{"type":"transcript","atxf":"0.1","id":"{id}","time":"2026-01-01T00:00:00.000Z","source":{{"agent":"pi","format":"pi/session-jsonl","sessionId":"{id}"}}}}"#, "\n",
+            r#"{{"type":"settings","id":"r1","parentId":null,"time":"2026-01-01T00:00:01.000Z","model":{{"provider":"anthropic","id":"claude"}}}}"#, "\n",
+            r#"{{"type":"message","id":"r2","parentId":"r1","time":"2026-01-01T00:00:02.000Z","role":"user","content":"hello"}}"#, "\n",
+        ),
+        id = id
+    ))
+    .expect("transcript parses")
+}
+
+fn opencode_session(text: &str) -> (String, Vec<String>) {
+    let export: serde_json::Value = serde_json::from_str(text).expect("export parses");
+    let ids = export["messages"].as_array().expect("messages").iter().map(|m| m["id"].as_str().expect("id").to_string()).collect();
+    (export["info"]["id"].as_str().expect("session id").to_string(), ids)
+}
+
+// OpenCode message ids are unique across all of its sessions, so ids written for one session must never be written
+// for another, while writing the same transcript for the same session again must give the same ids.
+#[test]
+fn opencode_message_ids_are_scoped_to_the_session_they_are_written_for() {
+    let opencode = formats::by_agent("opencode").unwrap();
+    let (_, a) = opencode_session(&opencode.from_atxf(&with_model_switch("ses_a"), true).unwrap());
+    let (_, b) = opencode_session(&opencode.from_atxf(&with_model_switch("ses_b"), true).unwrap());
+    assert!(a.iter().all(|id| !b.contains(id)), "{a:?} and {b:?} share ids");
+
+    let shared = with_model_switch("shared");
+    let for_a = opencode.from_atxf_for(&shared, true, Some("ses_a")).unwrap();
+    let (session, a) = opencode_session(&for_a);
+    let (_, b) = opencode_session(&opencode.from_atxf_for(&shared, true, Some("ses_b")).unwrap());
+    assert_eq!(session, "ses_a");
+    assert!(a.iter().all(|id| !b.contains(id)), "{a:?} and {b:?} share ids");
+    assert_eq!(for_a, opencode.from_atxf_for(&shared, true, Some("ses_a")).unwrap());
+    let back = opencode.to_atxf(&for_a, true).unwrap();
+    assert_eq!(back, shared);
+
+    let text = read("fixtures/opencode/export-2.0.20.json");
+    let (own_session, own) = opencode_session(&text);
+    let native = opencode.to_atxf(&text, true).unwrap();
+    let (_, other) = opencode_session(&opencode.from_atxf_for(&native, true, Some("ses_other")).unwrap());
+    assert!(other.iter().all(|id| !own.contains(id)), "{other:?} reuses {own:?}");
+    assert_eq!(opencode.from_atxf_for(&native, true, Some(&own_session)).unwrap(), text);
 }

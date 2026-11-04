@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::canonical::{canonical_json, sha256};
+use crate::canonical::{sha256_hex, write_canonical, write_canonical_object_without};
 use crate::json::{self, Get, Map, Obj, Value};
 use crate::transcript::{Error, Record, Transcript};
 
@@ -27,7 +27,14 @@ pub fn integrity_declaration() -> Value {
 }
 
 fn digest(domain: &str, text: &str) -> Hash {
-    format!("sha256:{}", sha256(&format!("{domain}{text}")))
+    digest_of(domain, |out| out.push_str(text))
+}
+
+/// `sha256:` and the hex digest of `domain` followed by whatever `write` appends, written into one buffer.
+fn digest_of(domain: &str, write: impl FnOnce(&mut String)) -> Hash {
+    let mut text = String::from(domain);
+    write(&mut text);
+    format!("sha256:{}", sha256_hex(text.as_bytes()))
 }
 
 /// The record without its `hash`.
@@ -38,12 +45,12 @@ pub fn without_hash(record: &Map) -> Map {
 }
 
 pub fn hash_header(header: &Map) -> Hash {
-    digest(DOMAIN_TRANSCRIPT, &canonical_json(&Value::Object(without_hash(header))))
+    digest_of(DOMAIN_TRANSCRIPT, |out| write_canonical_object_without(out, header, "hash"))
 }
 
 /// Digest of a record's own fields. A proof carries this instead of the full record.
 pub fn content_digest(record: &Map) -> Hash {
-    digest(DOMAIN_CONTENT, &canonical_json(&Value::Object(without_hash(record))))
+    digest_of(DOMAIN_CONTENT, |out| write_canonical_object_without(out, record, "hash"))
 }
 
 /// The reference fields present on a record, each with the referenced id (or `None` for `null`).
@@ -95,7 +102,7 @@ impl HashInput {
 }
 
 pub fn hash_from_input(input: &HashInput) -> Hash {
-    digest(DOMAIN_RECORD, &canonical_json(&input.to_value()))
+    digest_of(DOMAIN_RECORD, |out| write_canonical(out, &input.to_value()))
 }
 
 /// `resolve` maps a referenced id to that record's hash; it must know every earlier record.
@@ -165,6 +172,19 @@ impl TranscriptHasher {
 
     /// Hash the next record in file order, returning it with its hash.
     pub fn push(&mut self, record: &Map) -> Result<Map, Error> {
+        self.push_owned(record.clone())
+    }
+
+    /// `push` for a record the caller no longer needs: its hash is set in place, replacing any it had.
+    pub fn push_owned(&mut self, mut record: Map) -> Result<Map, Error> {
+        let hash = self.add(&record)?;
+        record.shift_remove("hash");
+        record.insert("hash".into(), Value::String(hash));
+        Ok(record)
+    }
+
+    /// Hash the next record in file order and return its hash. A `hash` the record already has is ignored.
+    pub fn add(&mut self, record: &Map) -> Result<Hash, Error> {
         let hash = hash_record(record, &self.transcript_hash, |id| self.hashes.get(id).cloned())?;
         if record.kind() != "seal" {
             for (_, id) in references_of(record) {
@@ -177,9 +197,7 @@ impl TranscriptHasher {
         self.hashes.insert(record.id().to_string(), hash.clone());
         self.chain = chain_step(&self.chain, &hash);
         self.count += 1;
-        let mut out = record.clone();
-        out.insert("hash".into(), Value::String(hash));
-        Ok(out)
+        Ok(hash)
     }
 
     /// The commitment a `seal` record appended now would carry.
@@ -214,12 +232,16 @@ pub struct SealAt<'a> {
 
 /// A copy of the transcript with `integrity` declared and every record hashed. Existing hashes are replaced.
 pub fn add_integrity(transcript: &Transcript, seal: Option<SealAt<'_>>) -> Result<Transcript, Error> {
+    add_integrity_owned(transcript.clone(), seal)
+}
+
+/// `add_integrity` for a transcript the caller no longer needs, hashing its records in place.
+pub fn add_integrity_owned(transcript: Transcript, seal: Option<SealAt<'_>>) -> Result<Transcript, Error> {
     let mut hasher = TranscriptHasher::new(without_hash(&transcript.header));
     let mut records = Vec::with_capacity(transcript.records.len() + 1);
-    for record in &transcript.records {
-        let unhashed = without_hash(record);
+    for record in transcript.records {
         // Seals depend on what precedes them, so they are recomputed rather than rehashed.
-        records.push(if unhashed.kind() == "seal" { hasher.seal(unhashed.id(), unhashed.time()) } else { hasher.push(&unhashed)? });
+        records.push(if record.kind() == "seal" { hasher.seal(record.id(), record.time()) } else { hasher.push_owned(record)? });
     }
     if let Some(seal) = seal {
         records.push(hasher.seal(seal.id, seal.time));
@@ -266,8 +288,8 @@ pub fn verify_integrity(transcript: &Transcript) -> Vec<IntegrityProblem> {
                 problems.push(problem(Some(index), "seal heads do not match the records before it"));
             }
         }
-        let computed = match hasher.push(&without_hash(record)) {
-            Ok(hashed) => hashed.str("hash").unwrap_or("").to_string(),
+        let computed = match hasher.add(record) {
+            Ok(hash) => hash,
             Err(error) => {
                 problems.push(problem(Some(index), &error.0));
                 continue;

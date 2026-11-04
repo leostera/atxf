@@ -140,7 +140,7 @@ impl FormatSpec for GeminiCli {
         Decoded { header, records: tree.records }
     }
 
-    fn encode(&self, transcript: &Transcript) -> Vec<Encoded> {
+    fn encode(&self, transcript: &Transcript, _session_id: Option<&str>) -> Vec<Encoded> {
         encode(transcript)
     }
 
@@ -161,7 +161,7 @@ impl FormatSpec for GeminiCli {
         out
     }
 
-    fn detach(&self, units: &[Unit]) -> Option<(Value, Vec<Unit>)> {
+    fn detach(&self, units: &mut Vec<Unit>) -> Option<Value> {
         detach_from_atxf_key(units)
     }
 }
