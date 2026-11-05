@@ -1,15 +1,17 @@
 ---
 import "../styles/site.css";
 import { SiteHeader } from "../components/SiteHeader";
-import { REPO_URL } from "../lib/site";
+import { REPO_URL, VERSION, specVersion } from "../lib/site";
 
 interface Props {
   title: string;
   description: string;
   current: string;
+  version?: string;
 }
 
-const { title, description, current } = Astro.props;
+const { title, description, current, version = VERSION } = Astro.props;
+const spec = specVersion(version);
 const canonical = new URL(Astro.url.pathname, Astro.site);
 ---
 
@@ -35,6 +37,25 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
         query.addEventListener("change", apply);
       })();
     </script>
+    <script is:inline>
+      // Switching versions keeps the reader at the same section.
+      document.addEventListener("click", (event) => {
+        const link = event.target instanceof Element && event.target.closest("a[data-version-link]");
+        if (link && location.hash) link.href = link.getAttribute("href") + location.hash;
+      });
+      // Close the version menu on an outside click or Escape.
+      document.addEventListener("click", (event) => {
+        for (const menu of document.querySelectorAll("details[data-version-menu][open]"))
+          if (!(event.target instanceof Node && menu.contains(event.target))) menu.open = false;
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        for (const menu of document.querySelectorAll("details[data-version-menu][open]")) {
+          menu.open = false;
+          menu.querySelector("summary")?.focus();
+        }
+      });
+    </script>
   </head>
   <body>
     <a
@@ -42,11 +63,17 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
       class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-20 focus:rounded focus:bg-kumo-base focus:px-3 focus:py-2"
       >Skip to content</a
     >
-    <SiteHeader current={current} />
+    <SiteHeader current={current} version={version} />
     <slot />
     <footer class="mt-24 border-t border-kumo-hairline">
       <div class="mx-auto flex max-w-6xl flex-wrap gap-x-6 gap-y-2 px-5 py-8 text-sm text-kumo-subtle">
-        <span>ATXF v0.1 is a draft and may change without notice.</span>
+        <span>
+          {
+            spec.stage === "draft"
+              ? `ATXF v${version} is a proposed draft and is not implemented yet.`
+              : `ATXF v${version} is a draft and may change without notice.`
+          }
+        </span>
         <a class="underline underline-offset-4 hover:text-kumo-strong" href={REPO_URL}>Source and issues</a>
         <a class="underline underline-offset-4 hover:text-kumo-strong" href={`${REPO_URL}/blob/main/LICENSE`}>MIT License</a>
       </div>

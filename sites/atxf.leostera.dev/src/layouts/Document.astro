@@ -8,12 +8,14 @@ interface Props {
   current: string;
   headings: TocHeading[];
   tocTitle?: string;
+  /** The spec version the page belongs to; defaults to the implemented one. */
+  version?: string;
 }
 
-const { title, description, current, headings, tocTitle = "Contents" } = Astro.props;
+const { title, description, current, headings, tocTitle = "Contents", version } = Astro.props;
 ---
 
-<Site title={title} description={description} current={current}>
+<Site title={title} description={description} current={current} version={version}>
   <div class="mx-auto grid max-w-6xl gap-10 px-5 pt-12 lg:grid-cols-[minmax(0,1fr)_15rem] lg:gap-16 lg:pt-16">
     <main id="content" class="min-w-0">
       <slot name="header" />

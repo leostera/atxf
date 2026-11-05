@@ -1,0 +1,57 @@
+---
+import { getEntry, render } from "astro:content";
+import Document from "../layouts/Document.astro";
+import RfcHeader, { type RfcField } from "./RfcHeader.astro";
+import { REPO_URL, SITE_URL, VERSION, lastUpdated, schemaPath, specVersion } from "../lib/site";
+
+interface Props {
+  version: string;
+}
+
+const spec = specVersion(Astro.props.version);
+const entry = await getEntry("docs", spec.entry);
+if (!entry) throw new Error(`${spec.source} not found`);
+const { Content, headings } = await render(entry);
+const toc = headings.filter((h) => h.depth === 2).map(({ slug, text }) => ({ slug, text }));
+
+const fields: RfcField[] = [
+  { label: "Status", kind: "status", value: spec.stage === "draft" ? "Proposed draft" : "Draft" },
+  { label: "Version", kind: "text", value: spec.version },
+  ...(spec.proposal ? [{ label: "Proposal", kind: "link" as const, value: spec.proposal.label, href: spec.proposal.href }] : []),
+  {
+    label: "Implemented",
+    kind: "text",
+    value: spec.stage === "draft" ? `Not yet; the reference libraries implement ${VERSION}` : "@leostera/atxf and the atxf crate",
+  },
+  { label: "Updated", kind: "date", value: lastUpdated(spec.source) },
+  { label: "Author", kind: "text", value: "Leo Ostera" },
+  { label: "Conventions", kind: "link", value: "MUST, SHOULD and MAY as in RFC 2119", href: "https://www.rfc-editor.org/rfc/rfc2119" },
+  { label: "Schema", kind: "copy", value: `${SITE_URL}${schemaPath(spec.version)}` },
+  { label: "Source", kind: "link", value: spec.source, href: `${REPO_URL}/blob/main/${spec.source}` },
+];
+---
+
+<Document
+  title={spec.stage === "draft" ? `ATXF ${spec.version} (draft): Agent Transcript Exchange Format` : "ATXF: Agent Transcript Exchange Format"}
+  description="Every coding agent stores sessions in its own format, so a session is stuck in the agent that started it. ATXF is one transcript format for Pi, Codex, Claude Code, OpenCode and Gemini CLI that keeps branches, compaction and what the model saw, and converts back without loss."
+  current={spec.href}
+  version={spec.version}
+  headings={toc}
+>
+  <RfcHeader slot="header" designator={`ATXF/${spec.version}`} title="Agent Transcript Exchange Format" fields={fields}>
+    <p>
+      Every coding agent keeps its sessions in its own format, so a session is stuck in the agent that started it.
+      Moving it to another agent means starting over, converting it flattens the branches, rewinds and compaction
+      that decide what the model saw, and once shared, nothing shows whether it was edited or whether two copies of
+      it have diverged. Every viewer, eval and search tool has to learn every format.
+    </p>
+    <p class="mt-4">
+      ATXF is one format for all of them. A session is an append-only <strong>tree</strong> of JSON records from which
+      a consumer rebuilds exactly what the model saw. Each record carries the <strong>native</strong> records it came
+      from, so conversions round-trip byte for byte. Optional <strong>hashes</strong> make a transcript
+      tamper-evident, and <strong>reconciliation</strong> merges copies that were continued in different places.
+      <slot />
+    </p>
+  </RfcHeader>
+  <Content />
+</Document>
