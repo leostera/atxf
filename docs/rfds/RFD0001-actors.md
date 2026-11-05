@@ -7,6 +7,7 @@
 - Updated: 2026-10-31
 - Discussion PR: TBD
 - Tracking Issue: TBD
+- Draft spec: [`SPEC-v0.2.md`](../../SPEC-v0.2.md), published at <https://atxf.leostera.dev/v0.2/>
 
 ## Summary
 

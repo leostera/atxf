@@ -106,7 +106,7 @@ opencode plugin add @leostera/opencode-atxf
 
 Packages have their own versions. The format version they implement is separate: `ATXF_VERSION` (written) and
 `ATXF_VERSIONS` (accepted) in `@leostera/atxf` and the `atxf` crate, and `atxf.protocols` in each package's
-`package.json`. Every package today implements ATXF 0.1.
+`package.json`. Every package today implements ATXF 0.1. ATXF 0.2, which adds attribution, is a proposed draft: [`SPEC-v0.2.md`](SPEC-v0.2.md), from [RFD0001](docs/rfds/RFD0001-actors.md).
 
 ## Roadmap
 
