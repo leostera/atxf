@@ -27,6 +27,7 @@ import {
   type Usage,
   type UserBlock,
   type UserContent,
+  ATXF_VERSION,
 } from "../index.ts";
 
 /**
@@ -140,7 +141,7 @@ function sessionHeader(info: J, native: ReturnType<typeof nativeOf> | undefined)
   const parent = typeof info.parentID === "string" ? { transcriptId: info.parentID, relation: "subagent" as const } : isObject(info.fork) && typeof info.fork.sessionID === "string" ? { transcriptId: info.fork.sessionID, relation: "fork" as const } : undefined;
   return compact({
     type: "transcript" as const,
-    atxf: "0.1" as const,
+    atxf: ATXF_VERSION,
     id: typeof info.id === "string" && info.id !== "" ? info.id : "opencode-session",
     time: isoTime(time.created, EPOCH),
     title: typeof info.title === "string" ? info.title : undefined,

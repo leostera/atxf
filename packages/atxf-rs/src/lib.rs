@@ -23,6 +23,13 @@ pub mod transcript;
 pub mod tree;
 pub mod validate;
 
+/// The ATXF format version written in the headers of transcripts this crate produces. The crate has its own
+/// version; this is the version of the format (SPEC §16).
+pub const ATXF_VERSION: &str = "0.1";
+
+/// Every ATXF format version this crate accepts.
+pub const ATXF_VERSIONS: &[&str] = &[ATXF_VERSION];
+
 pub use codec::Converter;
 pub use reconcile::{ReconcileResult, reconcile};
 pub use transcript::{Error, Transcript, parse_transcript, serialize_transcript};

@@ -10,3 +10,4 @@ export { validateTranscript, type Diagnostic, type Severity, type ValidationResu
 export * from "./native.ts";
 export * from "./codec.ts";
 export * from "./decode-helpers.ts";
+export * from "./version.ts";

@@ -227,7 +227,7 @@ fn session_header(info: &Map, native: Option<Map>) -> Map {
     };
     Obj::new()
         .set("type", "transcript")
-        .set("atxf", "0.1")
+        .set("atxf", crate::ATXF_VERSION)
         .set("id", info.nonempty("id").unwrap_or("opencode-session"))
         .set("time", iso_time(time.field("created"), EPOCH))
         .opt("title", info.str("title"))

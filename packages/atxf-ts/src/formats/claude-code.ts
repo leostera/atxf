@@ -24,6 +24,7 @@ import {
   type Usage,
   type UserBlock,
   type UserContent,
+  ATXF_VERSION,
 } from "../index.ts";
 
 /**
@@ -110,7 +111,7 @@ function sessionHeader(units: Unit[]): TranscriptHeader {
   const withBranch = entries.find((entry) => typeof entry.gitBranch === "string");
   return compact({
     type: "transcript" as const,
-    atxf: "0.1" as const,
+    atxf: ATXF_VERSION,
     id: typeof first.sessionId === "string" && first.sessionId !== "" ? first.sessionId : "claude-code-session",
     time: isoTime(withTime?.timestamp, EPOCH),
     source: compact({

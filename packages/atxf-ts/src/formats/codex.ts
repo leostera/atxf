@@ -21,6 +21,7 @@ import {
   type Usage,
   type UserBlock,
   type UserContent,
+  ATXF_VERSION,
 } from "../index.ts";
 
 /**
@@ -138,7 +139,7 @@ function sessionHeader(line: J, native: ReturnType<typeof nativeOf> | undefined)
   const parent = typeof meta.forked_from_id === "string" ? meta.forked_from_id : typeof meta.parent_thread_id === "string" ? meta.parent_thread_id : undefined;
   return compact({
     type: "transcript" as const,
-    atxf: "0.1" as const,
+    atxf: ATXF_VERSION,
     id: typeof meta.id === "string" && meta.id !== "" ? meta.id : "codex-session",
     time: isoTime(meta.timestamp, isoTime(line.timestamp, EPOCH)),
     source: compact({

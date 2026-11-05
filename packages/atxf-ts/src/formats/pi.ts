@@ -27,6 +27,7 @@ import {
   type Usage,
   type UserBlock,
   type UserContent,
+  ATXF_VERSION,
 } from "../index.ts";
 
 /**
@@ -73,7 +74,7 @@ function sessionHeader(session: J, native: ReturnType<typeof nativeOf> | undefin
   const id = typeof session.id === "string" && session.id !== "" ? session.id : "pi-session";
   return compact({
     type: "transcript" as const,
-    atxf: "0.1" as const,
+    atxf: ATXF_VERSION,
     id,
     time: isoTime(session.timestamp, EPOCH),
     source: compact({

@@ -295,7 +295,8 @@ their results are folded into that message as text, because the model cannot ans
    - TS and Rust cross-check over transcripts with attribution.
 3. Plugins: configuration, tagging, rendering with `perspective`. The Pi + OpenCode e2e asserts that each agent's
    model sees the other's turns attributed to it, which is the failure that motivated this RFD.
-4. Release as `@leostera/atxf` 0.3 and the `atxf` crate 0.2, then plugin releases.
+4. Release the libraries with `"0.2"` added to `ATXF_VERSIONS` and `ATXF_VERSION` set to `"0.2"`, then plugin
+   releases that list 0.2 in their `atxf.protocols`. Package versions are independent of the format version.
 
 Rolling back means writing 0.1 again. Files already written as 0.2 stay readable by 0.2 readers.
 

@@ -209,7 +209,7 @@ fn session_header(line: &Map, native: Option<Map>) -> Map {
     });
     Obj::new()
         .set("type", "transcript")
-        .set("atxf", "0.1")
+        .set("atxf", crate::ATXF_VERSION)
         .set("id", meta.nonempty("id").unwrap_or("codex-session"))
         .set("time", iso_time(meta.field("timestamp"), &iso_time(line.field("timestamp"), EPOCH)))
         .set(

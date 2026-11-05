@@ -1,3 +1,4 @@
+import type { AtxfVersion } from "./version.ts";
 /**
  * TypeScript types for ATXF v0.1 records. They mirror `schema/v0.1/atxf.schema.json`; the schema is canonical.
  */
@@ -180,7 +181,7 @@ export interface Fidelity {
 
 export interface TranscriptHeader {
   type: "transcript";
-  atxf: "0.1";
+  atxf: AtxfVersion;
   id: string;
   time: string;
   title?: string;

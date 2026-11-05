@@ -32,5 +32,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "atxf": {
+    "protocols": [
+      "0.1"
+    ]
   }
 }

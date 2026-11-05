@@ -170,7 +170,7 @@ fn session_header(meta: &Map, native: Option<Map>) -> Map {
     let roots = meta.arr("directories").filter(|d| !d.is_empty() && d.iter().all(Value::is_string)).cloned();
     Obj::new()
         .set("type", "transcript")
-        .set("atxf", "0.1")
+        .set("atxf", crate::ATXF_VERSION)
         .set("id", meta.nonempty("sessionId").unwrap_or("gemini-session"))
         .set("time", iso_time(meta.field("startTime"), EPOCH))
         .opt("title", meta.str("summary"))

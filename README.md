@@ -102,6 +102,12 @@ opencode plugin add @leostera/opencode-atxf
 
 `bun run e2e` runs both with scripted models, in temporary directories.
 
+## Versions
+
+Packages have their own versions. The format version they implement is separate: `ATXF_VERSION` (written) and
+`ATXF_VERSIONS` (accepted) in `@leostera/atxf` and the `atxf` crate, and `atxf.protocols` in each package's
+`package.json`. Every package today implements ATXF 0.1.
+
 ## Roadmap
 
 - Conformance fixtures for the reference `buildContext` (SPEC §5).

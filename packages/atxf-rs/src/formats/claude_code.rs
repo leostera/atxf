@@ -161,7 +161,7 @@ fn session_header(units: &[Unit]) -> Map {
     });
     Obj::new()
         .set("type", "transcript")
-        .set("atxf", "0.1")
+        .set("atxf", crate::ATXF_VERSION)
         .set("id", first.nonempty("sessionId").unwrap_or("claude-code-session"))
         .set("time", iso_time(with_time.and_then(|e| e.field("timestamp")), EPOCH))
         .set(

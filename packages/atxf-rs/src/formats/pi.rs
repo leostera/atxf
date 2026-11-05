@@ -96,7 +96,7 @@ fn session_header(session: &Map, native: Option<Map>) -> Map {
     let id = session.nonempty("id").unwrap_or("pi-session");
     Obj::new()
         .set("type", "transcript")
-        .set("atxf", "0.1")
+        .set("atxf", crate::ATXF_VERSION)
         .set("id", id)
         .set("time", iso_time(session.field("timestamp"), EPOCH))
         .set(

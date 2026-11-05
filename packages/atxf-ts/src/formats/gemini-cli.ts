@@ -23,6 +23,7 @@ import {
   type Unit,
   type UserBlock,
   type UserContent,
+  ATXF_VERSION,
 } from "../index.ts";
 
 /**
@@ -115,7 +116,7 @@ function isMetadata(value: unknown): value is J {
 function sessionHeader(meta: J, native: ReturnType<typeof nativeOf> | undefined): TranscriptHeader {
   return compact({
     type: "transcript" as const,
-    atxf: "0.1" as const,
+    atxf: ATXF_VERSION,
     id: typeof meta.sessionId === "string" && meta.sessionId !== "" ? meta.sessionId : "gemini-session",
     time: isoTime(meta.startTime, EPOCH),
     title: typeof meta.summary === "string" ? meta.summary : undefined,
