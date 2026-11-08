@@ -1,6 +1,6 @@
 {
   "name": "@leostera/atxf",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation",
   "license": "MIT",
   "author": "Leo Ostera",
@@ -32,7 +32,8 @@
     "src",
     "schema",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
