@@ -1,4 +1,4 @@
-import type { AtxfRecord, EntryRecord, Transcript } from "./types.ts";
+import type { AtxfRecord, EntryRecord, Transcript, TranscriptHeader } from "./types.ts";
 
 /**
  * A converter between one agent's native session format and ATXF.
@@ -19,6 +19,29 @@ export interface Converter {
    * active context, without marks or the carried transcript: a clean file that no longer round-trips.
    */
   fromAtxf(transcript: Transcript, options?: FromAtxfOptions): string;
+  /**
+   * Reads a native file one line at a time, as the agent appends to it. Present for line-framed formats whose
+   * records never change once written.
+   */
+  stream?(options?: { integrity?: boolean }): TranscriptStream;
+}
+
+/**
+ * A native file read as the agent writes it. Each record is final when it is returned: pushing a file's lines one
+ * by one returns the records `toAtxf` returns for the whole file, in order, and `header` is `toAtxf`'s header
+ * without `fidelity.nativeDigest`, which only a finished file has. Records are hashed against that header, so a
+ * stream's hashes are its own and stay the same however long the file grows. A stream keeps the ids and hashes it
+ * needs to resolve later references, never the records, so it reads a file of any length.
+ */
+export interface TranscriptStream {
+  /** The header, once the first line has been read. */
+  readonly header: TranscriptHeader | undefined;
+  /**
+   * Reads the next line, without its newline, and returns the records it adds: none for a line the header took.
+   * Throws a `RangeError` for a blank line or one holding a newline (a stream reads records, not text), and for
+   * a line carrying a transcript, which only `toAtxf` reads.
+   */
+  push(line: string): EntryRecord[];
 }
 
 export interface FromAtxfOptions {

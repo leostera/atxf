@@ -22,9 +22,17 @@ type JsonRecord = { type: string; id: string; [key: string]: unknown };
 
 // ajv-formats is CommonJS: its default import is the plugin under bundlers, and its module object under Node.
 const addFormats = ((formatsModule as unknown as { default?: FormatsPlugin }).default ?? formatsModule) as FormatsPlugin;
-const ajv = new Ajv2020({ allErrors: false, strict: false });
-addFormats(ajv);
-const validateRecord = ajv.compile(schema);
+// Compiled on first use, not on import: compiling generates code, which some runtimes (Cloudflare Workers) refuse,
+// and a program that only converts never validates.
+let compiled: ReturnType<Ajv2020["compile"]> | undefined;
+function recordValidator() {
+  if (compiled === undefined) {
+    const ajv = new Ajv2020({ allErrors: false, strict: false });
+    addFormats(ajv);
+    compiled = ajv.compile(schema);
+  }
+  return compiled;
+}
 
 
 /**
@@ -43,6 +51,7 @@ export function validateTranscript(text: string): ValidationResult {
   }
 
   for (const { line, record } of records) {
+    const validateRecord = recordValidator();
     if (!validateRecord(record)) {
       const detail = (validateRecord.errors ?? [])
         .map((e) => `${e.instancePath || "/"} ${e.message ?? "is invalid"}`)

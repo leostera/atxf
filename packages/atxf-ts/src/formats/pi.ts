@@ -14,6 +14,7 @@ import {
   type AssistantBlock,
   type DecodeContext,
   type Encoded,
+  type FormatReader,
   type EntryRecord,
   type J,
   type MessageBody,
@@ -41,33 +42,45 @@ export const FORMAT = "pi/session-jsonl";
 // Pi → ATXF
 
 function decode(units: Unit[], context: DecodeContext): { header: TranscriptHeader; records: EntryRecord[] } {
-  const tree = new TreeBuilder(context);
-  const native = (unit: Unit) => nativeOf([unit], AGENT, FORMAT);
-  let start = 0;
-  let header: TranscriptHeader;
-  const first = units[0]?.value;
-  if (isObject(first) && first.type === "session" && !context.known.has(0)) {
-    header = sessionHeader(first, native(units[0]!));
-    start = 1;
-  } else {
-    header = sessionHeader({}, undefined);
-  }
-  let hasContext = context.base?.records.some((record) => record.type === "context") ?? false;
+  const read = reader(context);
+  const { header, took } = read.start(units[0]);
+  for (let index = took ? 1 : 0; index < units.length; index++) read.next(units[index]!, index);
+  return { header, records: read.tree.records };
+}
 
-  for (let index = start; index < units.length; index++) {
-    const unit = units[index]!;
-    const entry = unit.value;
-    if (context.known.has(index)) {
-      if (isObject(entry) && typeof entry.id === "string") {
-        tree.alias(entry.id, context.known.get(index) ?? tree.parentOf(entry.parentId));
+/**
+ * Reads a Pi file one unit at a time, in file order. Each unit becomes its record from what came before it alone,
+ * so reading a file whole (`decode`) and reading it as Pi appends to it (`stream`) give the same records.
+ */
+function reader(context: DecodeContext, retain = true): FormatReader & { tree: TreeBuilder } {
+  const tree = new TreeBuilder(context, retain);
+  const native = (unit: Unit) => nativeOf([unit], AGENT, FORMAT);
+  let header: TranscriptHeader | undefined;
+  let hasContext = context.base?.records.some((record) => record.type === "context") ?? false;
+  return {
+    tree,
+    start(first) {
+      const value = first?.value;
+      if (isObject(value) && value.type === "session" && !context.known.has(0)) {
+        header = sessionHeader(value, native(first!));
+        return { header, took: true };
       }
-      continue;
-    }
-    const record = entryRecord(entry, index, tree, context, header.time, hasContext);
-    if (record.type === "context") hasContext = true;
-    tree.push(record, native(unit));
-  }
-  return { header, records: tree.records };
+      header = sessionHeader({}, undefined);
+      return { header, took: false };
+    },
+    next(unit, index) {
+      const entry = unit.value;
+      if (context.known.has(index)) {
+        if (isObject(entry) && typeof entry.id === "string") {
+          tree.alias(entry.id, context.known.get(index) ?? tree.parentOf(entry.parentId));
+        }
+        return undefined;
+      }
+      const record = entryRecord(entry, index, tree, context, header!.time, hasContext);
+      if (record.type === "context") hasContext = true;
+      return tree.push(record, native(unit));
+    },
+  };
 }
 
 function sessionHeader(session: J, native: ReturnType<typeof nativeOf> | undefined): TranscriptHeader {
@@ -602,5 +615,5 @@ const carrier = {
   },
 };
 
-export const pi = defineConverter({ agent: AGENT, format: FORMAT, framing: jsonl, decode, encode, carrier });
+export const pi = defineConverter({ agent: AGENT, format: FORMAT, framing: jsonl, decode, encode, carrier, reader: (context) => reader(context, false) });
 export default pi;

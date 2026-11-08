@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Checks one real Pi session: through every format and back, byte for byte, and its conversation without carry.
 // Run by test/chain.test.ts in a process of its own per session, so memory never outlives one session.
-import { conversationView, embeddedToolResults, summariesAsUser, type PortableMessage } from "../src/index.ts";
+import { addIntegrity, conversationView, embeddedToolResults, summariesAsUser, type PortableMessage } from "../src/index.ts";
 import { claudeCode } from "../src/formats/claude-code.ts";
 import { codex } from "../src/formats/codex.ts";
 import { geminiCli } from "../src/formats/gemini-cli.ts";
@@ -22,6 +22,25 @@ const text = await Bun.file(file).text();
 const transcript = pi.toAtxf(text);
 const expected = JSON.stringify(conversationView(transcript));
 Bun.gc(true);
+
+// Read as Pi appends it, the session gives the same records, hashed against a header without the file's digest.
+const lines = text.split("\n");
+// A file carrying a transcript (written by fromAtxf) is read whole; a stream refuses it.
+const carries = lines.some((line) => line.includes('"atxf"') && /"transcript"\s*:/.test(line));
+if (text.endsWith("\n") && !carries && !lines.slice(0, -1).some((line) => line.trim() === "")) {
+  const reading = pi.stream!();
+  const { nativeDigest: _, ...fidelity } = transcript.header.fidelity ?? {};
+  const want = addIntegrity({ header: { ...transcript.header, fidelity }, records: transcript.records });
+  let at = 0;
+  for (const line of lines.slice(0, -1)) {
+    for (const record of reading.push(line)) {
+      if (JSON.stringify(record) !== JSON.stringify(want.records[at])) fail(`streamed record ${at} differs from reading the file whole`);
+      at += 1;
+    }
+  }
+  if (at !== want.records.length || JSON.stringify(reading.header) !== JSON.stringify(want.header)) fail("streamed a different transcript");
+  Bun.gc(true);
+}
 
 for (const { converter } of converters) {
   const view = views[converter.agent];

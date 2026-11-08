@@ -30,6 +30,14 @@ const rollout = codex.fromAtxf(transcript); // Codex can continue it; reading it
 const context = buildContext(transcript); // what the model sees at the active leaf
 ```
 
+A Pi session can also be read as Pi writes it, one line at a time, holding only the ids and hashes later lines
+refer to. Each record is final when returned, and the same as `toAtxf` gives for the whole file:
+
+```ts
+const reading = pi.stream!();
+for (const line of newLines) for (const record of reading.push(line)) store(record);
+```
+
 The JSON Schema is at `@leostera/atxf/schema.json`.
 
 `@leostera/atxf/testing` holds fast-check generators, and `@leostera/atxf/laws` the laws every converter must

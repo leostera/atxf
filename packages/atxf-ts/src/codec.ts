@@ -1,6 +1,6 @@
-import { IdAllocator, type Converter, type FromAtxfOptions } from "./convert.ts";
+import { IdAllocator, type Converter, type FromAtxfOptions, type TranscriptStream } from "./convert.ts";
 import { canonicalJson, sha256 } from "./canonical.ts";
-import { addIntegrity } from "./integrity.ts";
+import { addIntegrity, TranscriptHasher } from "./integrity.ts";
 import { indexTree } from "./tree.ts";
 import { isPureNative, nativeUnits, type Framing, type Unit } from "./native.ts";
 import type { EntryRecord, Transcript, TranscriptHeader } from "./types.ts";
@@ -32,6 +32,19 @@ export interface FormatSpec {
    */
   encode(transcript: Transcript, options: { sessionId?: string }): Encoded[];
   carrier: Carrier;
+  /**
+   * Reads units one at a time, holding no records, for line-framed formats whose records never change once
+   * written. With it, the converter can `stream`. `decode` should read through the same reader, so the two agree.
+   */
+  reader?(context: DecodeContext): FormatReader;
+}
+
+/** A format's decoder, one unit at a time. */
+export interface FormatReader {
+  /** Starts the transcript from the file's first unit, which the header may take (`took`). */
+  start(first: Unit | undefined): { header: TranscriptHeader; took: boolean };
+  /** The record for the unit at `index` in the file, or `undefined` for a unit in `context.known`. */
+  next(unit: Unit, index: number): EntryRecord | undefined;
 }
 
 export interface Encoded {
@@ -116,7 +129,41 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
     return spec.framing.print(values.map((value) => ({ value, raw: spec.framing.canonical(value) })));
   };
 
-  return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf };
+  const reader = spec.reader;
+  const stream =
+    reader &&
+    ((options: ConvertOptions = {}): TranscriptStream => {
+      const integrity = options.integrity ?? defaults.integrity ?? true;
+      const read = reader({ known: new Map(), ids: new IdAllocator() });
+      let header: TranscriptHeader | undefined;
+      let hasher: TranscriptHasher | undefined;
+      let index = 0;
+      return {
+        get header() {
+          return hasher?.header ?? header;
+        },
+        push(line) {
+          if (line.trim() === "" || line.includes("\n")) throw new RangeError("a stream reads one record per line; blank lines belong to a file");
+          const unit = spec.framing.parse(`${line}\n`)[0]!;
+          if (spec.carrier.detach([unit])) throw new RangeError("a line carrying a transcript is read with toAtxf, with the rest of its file");
+          if (header === undefined) {
+            const started = read.start(unit);
+            header = started.header;
+            if (integrity) hasher = new TranscriptHasher(header);
+            if (started.took) {
+              index += 1;
+              return [];
+            }
+          }
+          const record = read.next(unit, index);
+          index += 1;
+          if (record === undefined) return [];
+          return [hasher ? hasher.push(record) : record];
+        },
+      };
+    });
+
+  return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf, ...(stream ? { stream } : {}) };
 }
 
 /** The digest of a native file, recorded in `fidelity.nativeDigest` of the transcript read from it. */
@@ -127,7 +174,9 @@ export function nativeDigest(text: string): string {
 /** Whether two transcripts hold the same header and records, ignoring hashes. Compares one record at a time. */
 function sameRecords(a: Transcript, b: Transcript): boolean {
   if (a.records.length !== b.records.length) return false;
-  const header = ({ hash: _h, integrity: _i, ...rest }: TranscriptHeader) => canonicalJson(rest);
+  // A streamed transcript has no digest of its file (see `TranscriptStream`); the digest is not content.
+  const header = ({ hash: _h, integrity: _i, fidelity, ...rest }: TranscriptHeader) =>
+    canonicalJson({ ...rest, fidelity: fidelity && { ...fidelity, nativeDigest: undefined } });
   if (header(a.header) !== header(b.header)) return false;
   const record = ({ hash: _, ...rest }: EntryRecord) => canonicalJson(rest);
   return a.records.every((r, i) => record(r) === record(b.records[i]!));

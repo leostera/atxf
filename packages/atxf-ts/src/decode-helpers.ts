@@ -32,6 +32,7 @@ export const EPOCH = "1970-01-01T00:00:00.000Z";
  * without a single counterpart, maps to the record its parent resolves to.
  */
 export class TreeBuilder {
+  /** Every record pushed, in order, unless built with `retain: false` to read a file of any length as a stream. */
   readonly records: EntryRecord[] = [];
   private readonly resolved = new Map<string, string | null>();
   private readonly parents = new Map<string, string | null>();
@@ -43,7 +44,10 @@ export class TreeBuilder {
   /** The carried transcript's active leaf, in a continuation. */
   private continuesFrom: string | null = null;
 
-  constructor(readonly context: DecodeContext) {
+  constructor(
+    readonly context: DecodeContext,
+    private readonly retain = true,
+  ) {
     for (const record of context.base?.records ?? []) this.observe(record);
     // A continuation picks up where the carried transcript is: its active leaf.
     if (context.base) this.last = this.continuesFrom = indexTree(context.base).activeLeaf;
@@ -115,7 +119,7 @@ export class TreeBuilder {
 
   push<R extends EntryRecord>(record: R, native?: Native): R {
     const full = (native ? { ...record, native } : record) as R;
-    this.records.push(full);
+    if (this.retain) this.records.push(full);
     this.observe(full);
     return full;
   }
