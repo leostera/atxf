@@ -6,7 +6,7 @@
       "name": "agent-transcript-exchange-format",
       "devDependencies": {
         "@leostera/atxf": "workspace:*",
-        "@leostera/feynman": "^0.12.0",
+        "@leostera/feynman": "^0.16.0",
         "@types/bun": "^1.4.4",
         "fast-check": "^4.10.2",
         "typescript": "^7.0.2",
@@ -336,7 +336,7 @@
 
     "@leostera/atxf": ["@leostera/atxf@workspace:packages/atxf-ts"],
 
-    "@leostera/feynman": ["@leostera/feynman@0.12.0", "", { "dependencies": { "@cloudflare/kumo": "^2.15.0", "@phosphor-icons/react": "^2.1.10", "@types/react": "^19.3.0", "calldiff": "0.5.0", "react": "^19.3.1", "shiki": "^4.5.0", "typescript": "^7.0.2", "vite": "^8.3.5" }, "bin": { "feynman": "bin/feynman.ts" } }, "sha512-6wvXsW1yrlIjxVlP1ftmOmwge5bB+TFXg3YQxLFnJUDaTqQkR7uziNJViXtXlkjkvTjYtj8a8dAWHPxlXSK8Rw=="],
+    "@leostera/feynman": ["@leostera/feynman@0.16.0", "", { "dependencies": { "@cloudflare/kumo": "^2.15.0", "@phosphor-icons/react": "^2.1.10", "@types/react": "^19.3.0", "calldiff": "0.5.0", "react": "^19.3.1", "shiki": "^4.5.0", "typescript": "^7.0.2", "vite": "^8.3.5" }, "bin": { "feynman": "bin/feynman.ts" } }, "sha512-5kdP+2pL+YRVC5L9yKJKxEsvdHazu+iX3XuU9FMsiQJTWQ61gAc7bsB96QL7SBG7sH8a+6CcNbg87rpsw4MWuA=="],
 
     "@leostera/opencode-atxf": ["@leostera/opencode-atxf@workspace:packages/opencode-atxf"],
 

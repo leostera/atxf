@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@leostera/atxf": "workspace:*",
-    "@leostera/feynman": "^0.12.0",
+    "@leostera/feynman": "^0.16.0",
     "@types/bun": "^1.4.4",
     "fast-check": "^4.10.2",
     "typescript": "^7.0.2"

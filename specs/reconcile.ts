@@ -11,7 +11,24 @@
 //
 // The records here keep only what decides reconciliation: id, parent, hash and a Lamport time. Content is folded
 // into the hash.
-import { defineSpec, message } from "@leostera/feynman";
+import {
+  atMost,
+  budget,
+  crash,
+  defineActor,
+  defineMessage,
+  defineProperty,
+  defineScenario,
+  defineVariable,
+  defineSpec,
+  defineZone,
+  lose,
+  nullable,
+  oneOf,
+  recordOf,
+  type Setup,
+  type WorldView,
+} from "@leostera/feynman";
 
 /** A record as reconciliation sees it. `key` is its Merkle hash: it covers the parent's key, so it names the
  * record and everything it depends on. */
@@ -63,210 +80,247 @@ const keysOf = (copy: Copy) => Object.keys(copy).sort().join(",");
 const changed = (s: { records: Copy; heard: string }) => keysOf(s.records) !== s.heard;
 const clockOf = (copy: Copy) => Math.max(0, ...Object.values(copy).map((r) => r.time));
 
-export default defineSpec(
-  "Reconciling session copies",
-  {
-    description: "Two Macs keep working on copies of one session; the session store reconciles them into one tree that keeps every branch.",
-    messages: {
-      Push: message<{ records: Copy }>({ name: "push copy", over: "https" }),
-      Reconciled: message<{ records: Copy; version: number }>({ name: "reconciled copy", over: "websocket", tone: "reply" }),
+const records = recordOf({ key: String, id: String, kind: oneOf("node", "leaf"), ref: nullable(String), time: Number });
+const Push = defineMessage("Push", { records }, { name: "push copy", over: "https" });
+// The store sends every reconciled copy down one websocket per Mac, which delivers them in the order they were sent.
+// Pushes are separate HTTPS requests, so they may arrive in any order. Without `ordered`, every property still holds
+// (10.7M states, every world), but the search no longer fits in the 5M states of feynman.config.ts.
+const Reconciled = defineMessage("Reconciled", { records, version: Number }, { name: "reconciled copy", over: "websocket", tone: "reply", ordered: true });
+
+// Either message may be lost, and a Mac may restart, at most once on any path. The store keeps everything it holds
+// and never restarts mid-step, so it has no crash. `--set faults=2` raises it.
+const faults = budget("faults", 1);
+// How often a Mac may append or push on one path; `--set repeats=3` raises both.
+const repeats = defineVariable("repeats", 2);
+// How often a Mac may rewind on one path. One per Mac covers rewinds on both Macs at once and the tie-break between
+// their leaf moves; a second only adds orders of the same events, and takes the search past 5M states.
+const rewinds = defineVariable("rewinds", 1);
+// How many records a Mac's copy may hold before it stops appending. `feynman conform --set maxRecords=…` raises it to
+// read a real session against the spec.
+const maxRecords = defineVariable("maxRecords", 4);
+
+const macs = defineZone({ name: "Macs", description: "working offline, then syncing", place: { arrange: "row" } });
+const cloud = defineZone({ name: "Cloud", description: "the session store every Mac syncs through" });
+
+export const Store = defineActor({
+  name: "Session store",
+  description: "Keeps the reconciled session and sends it to every Mac after each push.",
+  zone: cloud,
+  singleton: true,
+  initialState: () => ({ records: {} as Copy, version: 0 }),
+  display: {
+    icon: "database",
+    status: (s) => `${Object.keys(s.records).length} records, version ${s.version}`,
+    mood: () => "info",
+    rows: (s) => {
+      const ids = displayIds(s.records);
+      const leaf = activeLeaf(s.records);
+      return Object.values(s.records)
+        .filter((r) => r.kind === "node")
+        .sort((a, b) => a.time - b.time)
+        .map((r) => ({ group: "session", label: ids[r.key]!, detail: r.key === leaf ? "active leaf" : r.ref ? `after ${ids[r.ref] ?? "?"}` : "root", mood: r.key === leaf ? ("ok" as const) : undefined }));
     },
   },
-  (spec) => {
-    const { Push, Reconciled } = spec.messages;
-    const macs = spec.defineZone({ name: "Macs", description: "working offline, then syncing", place: { arrange: "row" } });
-    const cloud = spec.defineZone({ name: "Cloud" });
-
-    const Store = spec.defineActor({
-      name: "Session store",
-      description: "Keeps the reconciled session and sends it to every Mac after each push.",
-      zone: cloud,
-      singleton: true,
-      durable: ["records", "version"],
-      initialState: () => ({ records: {} as Copy, version: 0 }),
-      display: {
-        icon: "database",
-        status: (s) => `${Object.keys(s.records).length} records, version ${s.version}`,
-        mood: () => "info",
-        rows: (s) => {
-          const ids = displayIds(s.records);
-          const leaf = activeLeaf(s.records);
-          return Object.values(s.records)
-            .filter((r) => r.kind === "node")
-            .sort((a, b) => a.time - b.time)
-            .map((r) => ({ group: "session", label: ids[r.key]!, detail: r.key === leaf ? "active leaf" : r.ref ? `after ${ids[r.ref] ?? "?"}` : "root", mood: r.key === leaf ? ("ok" as const) : undefined }));
-        },
+  transitions: {
+    push: {
+      on: Push,
+      description: "Reconciles the pushed copy with its own and sends the result to every Mac.",
+      sends: [Reconciled],
+      say: (s) => `Reconciled: ${Object.keys(s.records).length} records, version ${s.version}`,
+      run(state, msg, ctx) {
+        state.records = union(state.records, msg.records);
+        state.version += 1;
+        for (const mac of ctx.all(Mac)) ctx.send(mac, Reconciled, { records: state.records, version: state.version });
       },
-      transitions: {
-        [Push]: {
-          description: "Reconciles the pushed copy with its own and sends the result to every Mac.",
-          sends: [Reconciled],
-          say: (s) => `Reconciled: ${Object.keys(s.records).length} records, version ${s.version}`,
-          run(state, msg, ctx) {
-            state.records = union(state.records, msg.records);
-            state.version += 1;
-            for (const mac of ctx.all(Mac)) ctx.send(mac, Reconciled, { records: state.records, version: state.version });
-          },
-        },
-      },
-    });
-
-    const Mac = spec.defineActor({
-      name: "Mac",
-      description: "Runs the agent; appends to its copy of the session, and rewinds.",
-      zone: macs,
-      // `heard`: the records of the last reconciled copy it got back. It has unpushed work while it holds others.
-      durable: ["records", "seen", "heard"],
-      initialState: () => ({ records: {} as Copy, seen: 0, heard: "" }),
-      display: {
-        icon: "laptop",
-        names: ["Studio", "Laptop"],
-        status: (s) => `${Object.keys(s.records).length} records${changed(s) ? ", not in sync" : ""}`,
-        mood: (s) => (changed(s) ? "busy" : "ok"),
-      },
-      actions: {
-        append: {
-          label: "Append",
-          description: "The agent appends a record at the active leaf. Ids are given by position, as Codex and Gemini CLI do, so two Macs can pick the same one.",
-          when: (s) => Object.keys(s.records).length < 4,
-          run(state, _inputs, ctx) {
-            const parent = activeLeaf(state.records);
-            const id = `e${Object.values(state.records).filter((r) => r.kind === "node").length + 1}`;
-            const key = ctx.hash(`${ctx.label}|${id}|${parent}`);
-            state.records = { ...state.records, [key]: { key, id, kind: "node", ref: parent, time: clockOf(state.records) + 1 } };
-          },
-        },
-        rewind: {
-          label: "Rewind",
-          description: "Moves back to the parent of the active leaf, appending a leaf move.",
-          when: (s) => {
-            const leaf = activeLeaf(s.records);
-            return leaf !== null && s.records[leaf]?.ref != null;
-          },
-          run(state, _inputs, ctx) {
-            const target = state.records[activeLeaf(state.records)!]!.ref;
-            const key = ctx.hash(`${ctx.label}|leaf|${target}|${clockOf(state.records)}`);
-            state.records = { ...state.records, [key]: { key, id: `leaf${clockOf(state.records) + 1}`, kind: "leaf", ref: target, time: clockOf(state.records) + 1 } };
-          },
-        },
-        push: {
-          label: "Push",
-          description: "Sends its whole copy to the session store.",
-          sends: [Push],
-          run(state, _inputs, ctx) {
-            ctx.send(ctx.the(Store), Push, { records: state.records });
-          },
-        },
-      },
-      transitions: {
-        [Reconciled]: {
-          description: "Reconciles the store's copy with its own, which may have moved on since it pushed.",
-          say: (s) => `Reconciled: ${Object.keys(s.records).length} records`,
-          run(state, msg, ctx) {
-            if (msg.version <= state.seen) return ctx.note("An older version, overtaken by a later one: nothing new.");
-            state.records = union(state.records, msg.records);
-            state.seen = msg.version;
-            state.heard = keysOf(msg.records);
-          },
-        },
-      },
-    });
-
-    const copies = (w: { the: (a: typeof Store) => { state: { records: Copy } }; all: (a: typeof Mac) => { state: { records: Copy } }[] }) => [
-      w.the(Store).state.records,
-      ...w.all(Mac).map((m) => m.state.records),
-    ];
-
-    spec.defineProperties({
-      noRecordIsLost: {
-        description: "No copy ever loses a record: reconciling only adds.",
-        everyStep: (before, after) => {
-          const was = copies(before);
-          const is = copies(after);
-          return was.every((copy, i) => Object.keys(copy).every((key) => key in (is[i] ?? {})));
-        },
-      },
-      everyRecordHasItsParent: {
-        description: "In every copy, every record's parent or target is there too, so the tree is whole.",
-        always: (w) => copies(w).every((copy) => Object.values(copy).every((r) => r.ref === null || r.ref in copy)),
-      },
-      idsAreUnique: {
-        description: "In every copy, records sharing an id get distinct display ids: both are kept.",
-        always: (w) => copies(w).every((copy) => new Set(Object.values(displayIds(copy))).size === Object.keys(copy).length),
-      },
-      sameRecordsSamePlace: {
-        description: "Copies holding the same records show the same active leaf, whatever order they were reconciled in.",
-        always: (w) => {
-          const all = copies(w);
-          return all.every((a) => all.every((b) => keysOf(a) !== keysOf(b) || activeLeaf(a) === activeLeaf(b)));
-        },
-      },
-      convergesOnceQuiet: {
-        description: "Once nothing is in flight, Macs that saw the latest version and changed nothing since hold exactly the store's records.",
-        always: (w) => {
-          if (!w.quiet) return true;
-          const store = w.the(Store).state;
-          return w.all(Mac).every((m) => changed(m.state) || m.state.seen !== store.version || keysOf(m.state.records) === keysOf(store.records));
-        },
-      },
-      storeHoldsEveryPush: {
-        description: "Once nothing is in flight, the store holds every record of every Mac that pushed and changed nothing since.",
-        always: (w) => !w.quiet || w.all(Mac).every((m) => changed(m.state) || m.state.seen === 0 || Object.keys(m.state.records).every((key) => key in w.the(Store).state.records)),
-      },
-    });
-
-    const shared = (w: { spawn: (a: typeof Mac, label: string, state: { records: Copy }) => unknown; set: (a: typeof Store, state: { records: Copy; version: number }) => void }) => {
-      const records: Copy = {
-        k1: { key: "k1", id: "e1", kind: "node", ref: null, time: 1 },
-        k2: { key: "k2", id: "e2", kind: "node", ref: "k1", time: 2 },
-      };
-      w.set(Store, { records, version: 1 });
-      w.spawn(Mac, "Studio", { records });
-      w.spawn(Mac, "Laptop", { records });
-    };
-
-    spec.defineScenario({
-      name: "Diverge and reconcile",
-      description: "Both Macs append to the same two records offline and pick the same id; the store keeps both as sibling branches, and the later one is the active leaf.",
-      setup: (w) => shared(w as never),
-      run(s) {
-        const [studio, laptop] = s.all(Mac);
-        s.act(studio!, "append");
-        s.act(laptop!, "append");
-        s.act(studio!, "push");
-        s.act(laptop!, "push");
-        s.settle();
-      },
-    });
-
-    spec.defineScenario({
-      name: "Rewind on one Mac",
-      description: "The Laptop rewinds and pushes; its leaf move is the latest event, so every copy moves back with it, and the branch it left stays.",
-      setup: (w) => shared(w as never),
-      run(s) {
-        const [studio, laptop] = s.all(Mac);
-        s.act(studio!, "append");
-        s.act(studio!, "push");
-        s.settle();
-        s.act(laptop!, "rewind");
-        s.act(laptop!, "push");
-        s.settle();
-      },
-    });
-
-    spec.defineScenario({
-      name: "Push twice",
-      description: "Pushing the same copy again changes no records: reconciling is idempotent.",
-      setup: (w) => shared(w as never),
-      run(s) {
-        const [studio] = s.all(Mac);
-        s.act(studio!, "append");
-        s.act(studio!, "push");
-        s.act(studio!, "push");
-        s.settle();
-      },
-    });
-
-    return { Store, Mac };
+    },
+    pushLost: lose(Push, { spend: faults }),
   },
-);
+});
+
+export const Mac = defineActor({
+  name: "Mac",
+  description: "Runs the agent; appends to its copy of the session, and rewinds.",
+  zone: macs,
+  // `heard`: the records of the last reconciled copy it got back. It has unpushed work while it holds others.
+  initialState: () => ({ records: {} as Copy, seen: 0, heard: "" }),
+  display: {
+    icon: "laptop",
+    names: ["Studio", "Laptop"],
+    status: (s) => `${Object.keys(s.records).length} records${changed(s) ? ", not in sync" : ""}`,
+    mood: (s) => (changed(s) ? "busy" : "ok"),
+  },
+  actions: {
+    append: {
+      with: [atMost(repeats)],
+      label: "Append",
+      description: "The agent appends a record at the active leaf. Ids are given by position, as Codex and Gemini CLI do, so two Macs can pick the same one.",
+      uses: [maxRecords],
+      when: (s, model) => Object.keys(s.records).length < model.get(maxRecords),
+      run(state, _inputs, ctx) {
+        const parent = activeLeaf(state.records);
+        const id = `e${Object.values(state.records).filter((r) => r.kind === "node").length + 1}`;
+        const key = ctx.hash(`${ctx.label}|${id}|${parent}`);
+        state.records = { ...state.records, [key]: { key, id, kind: "node", ref: parent, time: clockOf(state.records) + 1 } };
+      },
+    },
+    rewind: {
+      with: [atMost(rewinds)],
+      label: "Rewind",
+      description: "Moves back to the parent of the active leaf, appending a leaf move.",
+      when: (s) => {
+        const leaf = activeLeaf(s.records);
+        return leaf !== null && s.records[leaf]?.ref != null;
+      },
+      run(state, _inputs, ctx) {
+        const target = state.records[activeLeaf(state.records)!]!.ref;
+        const key = ctx.hash(`${ctx.label}|leaf|${target}|${clockOf(state.records)}`);
+        state.records = { ...state.records, [key]: { key, id: `leaf${clockOf(state.records) + 1}`, kind: "leaf", ref: target, time: clockOf(state.records) + 1 } };
+      },
+    },
+    push: {
+      with: [atMost(repeats)],
+      label: "Push",
+      description: "Sends its whole copy to the session store.",
+      sends: [Push],
+      run(state, _inputs, ctx) {
+        ctx.send(ctx.the(Store), Push, { records: state.records });
+      },
+    },
+  },
+  transitions: {
+    reconciled: {
+      on: Reconciled,
+      description: "Reconciles the store's copy with its own, which may have moved on since it pushed.",
+      say: (s) => `Reconciled: ${Object.keys(s.records).length} records`,
+      run(state, msg, ctx) {
+        if (msg.version <= state.seen) return ctx.note("An older version, overtaken by a later one: nothing new.");
+        state.records = union(state.records, msg.records);
+        state.seen = msg.version;
+        state.heard = keysOf(msg.records);
+      },
+    },
+    reconciledLost: lose(Reconciled, { spend: faults }),
+    crash: crash({ keeps: ["records", "seen", "heard"], spend: faults }),
+  },
+});
+
+const copies = (w: WorldView) => [w.the(Store).state.records, ...w.all(Mac).map((m) => m.state.records)];
+
+const noRecordIsLost = defineProperty("noRecordIsLost", {
+  description: "No copy ever loses a record: reconciling only adds.",
+  everyStep: (before, after) => {
+    const was = copies(before);
+    const is = copies(after);
+    return was.every((copy, i) => Object.keys(copy).every((key) => key in (is[i] ?? {})));
+  },
+});
+
+const everyRecordHasItsParent = defineProperty("everyRecordHasItsParent", {
+  description: "In every copy, every record's parent or target is there too, so the tree is whole.",
+  always: (w) => copies(w).every((copy) => Object.values(copy).every((r) => r.ref === null || r.ref in copy)),
+});
+
+const idsAreUnique = defineProperty("idsAreUnique", {
+  description: "In every copy, records sharing an id get distinct display ids: both are kept.",
+  always: (w) => copies(w).every((copy) => new Set(Object.values(displayIds(copy))).size === Object.keys(copy).length),
+});
+
+const sameRecordsSamePlace = defineProperty("sameRecordsSamePlace", {
+  description: "Copies holding the same records show the same active leaf, whatever order they were reconciled in.",
+  always: (w) => {
+    const all = copies(w);
+    return all.every((a) => all.every((b) => keysOf(a) !== keysOf(b) || activeLeaf(a) === activeLeaf(b)));
+  },
+});
+
+const convergesOnceQuiet = defineProperty("convergesOnceQuiet", {
+  description: "Once nothing is in flight, Macs that saw the latest version and changed nothing since hold exactly the store's records.",
+  always: (w) => {
+    if (!w.quiet) return true;
+    const store = w.the(Store).state;
+    return w.all(Mac).every((m) => changed(m.state) || m.state.seen !== store.version || keysOf(m.state.records) === keysOf(store.records));
+  },
+});
+
+const storeHoldsEveryPush = defineProperty("storeHoldsEveryPush", {
+  description: "Once nothing is in flight, the store holds every record of every Mac that pushed and changed nothing since.",
+  always: (w) => !w.quiet || w.all(Mac).every((m) => changed(m.state) || m.state.seen === 0 || Object.keys(m.state.records).every((key) => key in w.the(Store).state.records)),
+});
+
+// What must be possible: without these, a spec in which nobody ever syncs would keep every property above.
+
+/** Two records that share an id, both in the store: positional ids collided, and reconciling kept both. */
+const collision = (copy: Copy) => {
+  const nodes = Object.values(copy).filter((r) => r.kind === "node");
+  return new Set(nodes.map((r) => r.id)).size < nodes.length;
+};
+
+const branchesAreKept = defineProperty("branchesAreKept", {
+  description: "Two Macs can append different records under one id, and the store keeps both as sibling branches.",
+  reachable: (w) => collision(w.the(Store).state.records),
+});
+
+const everyMacCatchesUp = defineProperty("everyMacCatchesUp", {
+  description: "Both Macs can end up holding the store's records, with branches from both of them.",
+  reachable: (w) => {
+    const store = w.the(Store).state.records;
+    return w.quiet && collision(store) && w.all(Mac).every((m) => keysOf(m.state.records) === keysOf(store));
+  },
+});
+
+const shared = (w: Setup) => {
+  const records: Copy = {
+    k1: { key: "k1", id: "e1", kind: "node", ref: null, time: 1 },
+    k2: { key: "k2", id: "e2", kind: "node", ref: "k1", time: 2 },
+  };
+  w.set(Store, { records, version: 1 });
+  w.spawn(Mac, "Studio", { records });
+  w.spawn(Mac, "Laptop", { records });
+};
+
+const divergeAndReconcile = defineScenario("Diverge and reconcile", {
+  description: "Both Macs append to the same two records offline and pick the same id; the store keeps both as sibling branches, and the later one is the active leaf.",
+  setup: shared,
+  run(s) {
+    const [studio, laptop] = s.all(Mac);
+    s.act(studio!, "append");
+    s.act(laptop!, "append");
+    s.act(studio!, "push");
+    s.act(laptop!, "push");
+    s.settle();
+  },
+});
+
+const rewindOnOneMac = defineScenario("Rewind on one Mac", {
+  description: "The Laptop rewinds and pushes; its leaf move is the latest event, so every copy moves back with it, and the branch it left stays.",
+  setup: shared,
+  run(s) {
+    const [studio, laptop] = s.all(Mac);
+    s.act(studio!, "append");
+    s.act(studio!, "push");
+    s.settle();
+    s.act(laptop!, "rewind");
+    s.act(laptop!, "push");
+    s.settle();
+  },
+});
+
+const pushTwice = defineScenario("Push twice", {
+  description: "Pushing the same copy again changes no records: reconciling is idempotent.",
+  setup: shared,
+  run(s) {
+    const [studio] = s.all(Mac);
+    s.act(studio!, "append");
+    s.act(studio!, "push");
+    s.act(studio!, "push");
+    s.settle();
+  },
+});
+
+export default defineSpec({
+  name: "Reconciling session copies",
+  description: "Two Macs keep working on copies of one session; the session store reconciles them into one tree that keeps every branch.",
+  actors: [Store, Mac],
+  properties: [noRecordIsLost, everyRecordHasItsParent, idsAreUnique, sameRecordsSamePlace, convergesOnceQuiet, storeHoldsEveryPush, branchesAreKept, everyMacCatchesUp],
+  scenarios: [divergeAndReconcile, rewindOnOneMac, pushTwice],
+});
