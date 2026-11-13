@@ -48,6 +48,12 @@ export interface FromAtxfOptions {
   /** Write marks and the carried transcript, so the file reads back as the same transcript. Default true. */
   carry?: boolean;
   /**
+   * With `carry: false`, write every record, branches and compacted history included, rather than the active
+   * context alone, for formats that can hold a tree. Default false. A converter that keeps what native records hold
+   * beyond ATXF's fields in `ext` (SPEC §11.2) writes a file equal to the original as JSON, entry by entry.
+   */
+  tree?: boolean;
+  /**
    * The id of the native session the file will be loaded as, when that is not the transcript's own session, e.g.
    * when an agent replaces one of its sessions with a shared transcript. Formats whose ids must be unique across
    * sessions derive their ids from it. Default: the transcript's `source.sessionId`, else its id.
