@@ -45,7 +45,7 @@ ATXF aims to be general enough to hold any of these formats without losing their
 | [`packages/atxf-rs/`](packages/atxf-rs) | The `atxf` Rust crate and binary: the same API, writing the same bytes and hashes as `@leostera/atxf` |
 | [`scripts/`](scripts) | `cross-check.sh` and `cross-check-generated.ts`: the TypeScript and Rust implementations must agree byte for byte |
 | [`fixtures/`](fixtures) | Native session files per agent, shared by the tests |
-| [`specs/`](specs) | Feynman models of distributed behaviour: [`reconcile.ts`](specs/reconcile.ts) |
+| [`specs/`](specs) | Feynman models of distributed behaviour: [`reconcile.ts`](specs/reconcile.ts) (copies of a session reconciled into one tree), [`stream-resume.ts`](specs/stream-resume.ts) (a live Pi session read across evictions and deploys) |
 | [`sites/atxf.leostera.dev/`](sites/atxf.leostera.dev) | The specification website (Astro + Kumo), deployed to https://atxf.leostera.dev |
 
 ## Use it

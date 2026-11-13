@@ -1,6 +1,7 @@
 // Reconciling copies of one session.
 //
-// Two Macs hold copies of the same session and keep working offline: each appends to its copy, and may rewind.
+// Two Macs hold copies of the same session and keep working offline: each appends to its copy, and may rewind to
+// the parent of where it is, or navigate to the tip of another branch (Pi's /tree).
 // Whenever a Mac pushes its copy, the session store reconciles it with what it has and sends the result to every
 // Mac, which reconciles it with its own copy. Reconciliation is a union of records keyed by their Merkle hash
 // (SPEC §17), so it is commutative, associative and idempotent, and no copy ever loses a record: divergent
@@ -22,6 +23,7 @@ import {
   defineVariable,
   defineSpec,
   defineZone,
+  input,
   lose,
   nullable,
   oneOf,
@@ -75,6 +77,16 @@ function activeLeaf(copy: Copy): string | null {
   return event === undefined ? null : event.kind === "leaf" ? event.ref : event.key;
 }
 
+/** The tips of a copy's branches other than the active leaf, by display id: where a Mac can navigate to. */
+const otherTips = (copy: Copy) => {
+  const ids = displayIds(copy);
+  const parents = new Set(Object.values(copy).filter((r) => r.kind === "node" && r.ref !== null).map((r) => r.ref));
+  const leaf = activeLeaf(copy);
+  return Object.values(copy)
+    .filter((r) => r.kind === "node" && !parents.has(r.key) && r.key !== leaf)
+    .map((r) => ids[r.key]!);
+};
+
 const keysOf = (copy: Copy) => Object.keys(copy).sort().join(",");
 /** Whether a Mac holds records the store has not sent back to it. */
 const changed = (s: { records: Copy; heard: string }) => keysOf(s.records) !== s.heard;
@@ -92,9 +104,11 @@ const Reconciled = defineMessage("Reconciled", { records, version: Number }, { n
 const faults = budget("faults", 1);
 // How often a Mac may append or push on one path; `--set repeats=3` raises both.
 const repeats = defineVariable("repeats", 2);
-// How often a Mac may rewind on one path. One per Mac covers rewinds on both Macs at once and the tie-break between
-// their leaf moves; a second only adds orders of the same events, and takes the search past 5M states.
-const rewinds = defineVariable("rewinds", 1);
+// How often a Mac may move its leaf on one path, by rewinding or navigating: one bound for both. One per Mac covers a
+// move on both Macs at once and the tie-break between their leaf moves, of either kind; a second only adds orders
+// of the same events, and takes the search past 5M states. `--set moves=2` raises it.
+const moves = defineVariable("moves", 1);
+const leafMoves = atMost(moves);
 // How many records a Mac's copy may hold before it stops appending. `feynman conform --set maxRecords=…` raises it to
 // read a real session against the spec.
 const maxRecords = defineVariable("maxRecords", 4);
@@ -125,6 +139,7 @@ export const Store = defineActor({
     push: {
       on: Push,
       description: "Reconciles the pushed copy with its own and sends the result to every Mac.",
+      sources: ["packages/atxf-ts/src/reconcile.ts#reconcile"],
       sends: [Reconciled],
       say: (s) => `Reconciled: ${Object.keys(s.records).length} records, version ${s.version}`,
       run(state, msg, ctx) {
@@ -139,7 +154,7 @@ export const Store = defineActor({
 
 export const Mac = defineActor({
   name: "Mac",
-  description: "Runs the agent; appends to its copy of the session, and rewinds.",
+  description: "Runs the agent; appends to its copy of the session, rewinds and navigates.",
   zone: macs,
   // `heard`: the records of the last reconciled copy it got back. It has unpushed work while it holds others.
   initialState: () => ({ records: {} as Copy, seen: 0, heard: "" }),
@@ -164,7 +179,7 @@ export const Mac = defineActor({
       },
     },
     rewind: {
-      with: [atMost(rewinds)],
+      with: [leafMoves],
       label: "Rewind",
       description: "Moves back to the parent of the active leaf, appending a leaf move.",
       when: (s) => {
@@ -177,10 +192,28 @@ export const Mac = defineActor({
         state.records = { ...state.records, [key]: { key, id: `leaf${clockOf(state.records) + 1}`, kind: "leaf", ref: target, time: clockOf(state.records) + 1 } };
       },
     },
+    navigate: {
+      with: [leafMoves],
+      label: "Navigate",
+      description: "Moves to the tip of another branch, appending a leaf move; it continues from there.",
+      // A tip by display id, from any Mac's copy: the checker tries each, and a Mac without it stays where it is.
+      // Moving to an ancestor is a rewind.
+      inputs: { to: input(String, { examples: (w): string[] => [...new Set(w.all(Mac).flatMap((m) => otherTips(m.state.records)))].sort() }) },
+      when: (s) => otherTips(s.records).length > 0,
+      run(state, { to }, ctx) {
+        const ids = displayIds(state.records);
+        const target = Object.values(state.records).find((r) => ids[r.key] === to && otherTips(state.records).includes(to));
+        if (target === undefined) return ctx.note(`No other tip ${to} here: it stays where it is.`);
+        const time = clockOf(state.records) + 1;
+        const key = ctx.hash(`${ctx.label}|leaf|${target.key}|${clockOf(state.records)}`);
+        state.records = { ...state.records, [key]: { key, id: `leaf${time}`, kind: "leaf", ref: target.key, time } };
+      },
+    },
     push: {
       with: [atMost(repeats)],
       label: "Push",
       description: "Sends its whole copy to the session store.",
+      sources: ["packages/atxf-ts/src/sync.ts#push"],
       sends: [Push],
       run(state, _inputs, ctx) {
         ctx.send(ctx.the(Store), Push, { records: state.records });
@@ -191,6 +224,7 @@ export const Mac = defineActor({
     reconciled: {
       on: Reconciled,
       description: "Reconciles the store's copy with its own, which may have moved on since it pushed.",
+      sources: ["packages/atxf-ts/src/sync.ts#pull"],
       say: (s) => `Reconciled: ${Object.keys(s.records).length} records`,
       run(state, msg, ctx) {
         if (msg.version <= state.seen) return ctx.note("An older version, overtaken by a later one: nothing new.");
@@ -268,6 +302,16 @@ const everyMacCatchesUp = defineProperty("everyMacCatchesUp", {
   },
 });
 
+const navigatesToAnotherBranch = defineProperty("navigatesToAnotherBranch", {
+  description: "A Mac can move to a branch it did not write, and every copy that reconciled its move is there with it.",
+  reachable: (w) => {
+    const store = w.the(Store).state.records;
+    const leaf = activeLeaf(store);
+    const event = positioning(store);
+    return w.quiet && collision(store) && event?.kind === "leaf" && leaf !== null && w.all(Mac).every((m) => activeLeaf(m.state.records) === leaf);
+  },
+});
+
 const shared = (w: Setup) => {
   const records: Copy = {
     k1: { key: "k1", id: "e1", kind: "node", ref: null, time: 1 },
@@ -317,10 +361,29 @@ const pushTwice = defineScenario("Push twice", {
   },
 });
 
+const navigateToTheOtherBranch = defineScenario("Navigate to the other branch", {
+  description: "Both Macs append under the same id; once reconciled, the Studio navigates to the Laptop's branch, and every copy follows it there.",
+  setup: shared,
+  run(s) {
+    const [studio, laptop] = s.all(Mac);
+    s.act(studio!, "append");
+    s.act(laptop!, "append");
+    s.act(studio!, "push");
+    s.act(laptop!, "push");
+    s.settle();
+    const ids = displayIds(studio!.state.records);
+    const mine = activeLeaf(studio!.state.records);
+    const other = Object.values(studio!.state.records).find((r) => r.kind === "node" && r.id === "e3" && r.key !== mine);
+    s.act(studio!, "navigate", { to: ids[other!.key]! });
+    s.act(studio!, "push");
+    s.settle();
+  },
+});
+
 export default defineSpec({
   name: "Reconciling session copies",
   description: "Two Macs keep working on copies of one session; the session store reconciles them into one tree that keeps every branch.",
   actors: [Store, Mac],
-  properties: [noRecordIsLost, everyRecordHasItsParent, idsAreUnique, sameRecordsSamePlace, convergesOnceQuiet, storeHoldsEveryPush, branchesAreKept, everyMacCatchesUp],
-  scenarios: [divergeAndReconcile, rewindOnOneMac, pushTwice],
+  properties: [noRecordIsLost, everyRecordHasItsParent, idsAreUnique, sameRecordsSamePlace, convergesOnceQuiet, storeHoldsEveryPush, branchesAreKept, everyMacCatchesUp, navigatesToAnotherBranch],
+  scenarios: [divergeAndReconcile, rewindOnOneMac, navigateToTheOtherBranch, pushTwice],
 });

@@ -1,4 +1,10 @@
 {
   "version": 1,
-  "sources": {}
+  "sources": {
+    "packages/atxf-ts/src/codec.ts:171-181": "1ac1885ba8b9",
+    "packages/atxf-ts/src/codec.ts:182-205": "45d2c25dc81d",
+    "packages/atxf-ts/src/reconcile.ts#reconcile": "06bd7d0a1a73",
+    "packages/atxf-ts/src/sync.ts#pull": "876e63145de0",
+    "packages/atxf-ts/src/sync.ts#push": "8792ada94237"
+  }
 }
