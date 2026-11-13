@@ -22,6 +22,7 @@ ATXF's tree and context semantics follow Pi, so this mapping is the closest to o
 | `custom_message` | `message`, role `user`, `origin.kind: extension`, carrying `display` |
 | `custom` | `custom` with `namespace: pi`, its `customType` as `name` |
 | `custom` with `customType: atxf.record` | the ATXF record in its `data`: how the whole-tree writer writes a record Pi has no entry for |
+| an entry with `atxf.patch` | the record read from it, patched: how the whole-tree writer keeps the fields of a record that Pi's entry cannot hold |
 | an entry with no ATXF form (unknown type, missing fields, a bash execution excluded from context) | `custom` with `namespace: pi.entry`, the entry whole in `data` |
 | a line that is not JSON | `custom` with `namespace: pi.line`, the line in `data.text` |
 | `usage` | `usage` |

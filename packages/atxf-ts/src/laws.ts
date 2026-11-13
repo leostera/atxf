@@ -31,7 +31,7 @@ export interface LawOptions {
  *    records, and its header without `fidelity.nativeDigest`; the streamed transcript writes back the same file.
  * 6. **Without native,** for a converter that writes whole trees (SPEC §11.2): a native file read, stripped of
  *    `native` and written as a whole tree equals the original entry by entry, as JSON; read again, it gives the
- *    same transcript. Any transcript written as a whole tree keeps every record, by id and type, in order.
+ *    same transcript. Any transcript written as a whole tree reads back as itself.
  */
 export function describeConverterLaws(converter: Converter, options: LawOptions = {}) {
   const runs = options.runs ?? Number(process.env.ATXF_RUNS ?? 100);
@@ -126,11 +126,11 @@ export function describeConverterLaws(converter: Converter, options: LawOptions 
         );
       });
 
-      test("without native: any transcript written as a whole tree keeps every record, by id and type", () => {
+      test("without native: any transcript written as a whole tree reads back as itself", () => {
         fc.assert(
           fc.property(arbitraryTranscript({ integrity: false }), (t) => {
             const back = converter.toAtxf(converter.fromAtxf(t, { carry: false, tree: true }), { integrity: false });
-            expect(back.records.map((r) => `${r.type}:${r.id}`)).toEqual(t.records.map((r) => `${r.type}:${r.id}`));
+            expect(withoutNative(back)).toEqual(withoutNative(t));
           }),
           { numRuns: runs },
         );
@@ -146,6 +146,20 @@ export function describeConverterLaws(converter: Converter, options: LawOptions 
         { numRuns: runs },
       );
     });
+  });
+}
+
+/** A transcript as it is without native: no native records, nor what the header says of them. */
+function withoutFidelity<H extends { fidelity?: unknown }>({ fidelity: _, ...header }: H): Omit<H, "fidelity"> {
+  return header;
+}
+
+function withoutNative(t: Transcript): Transcript {
+  const { native: _, ...header } = t.header;
+  const { nativeDigest: __, native: ____, ...fidelity } = header.fidelity ?? {};
+  return normalize({
+    header: Object.keys(fidelity).length === 0 ? withoutFidelity(header) : { ...header, fidelity },
+    records: t.records.map(({ native: ___, ...record }) => record as typeof record),
   });
 }
 

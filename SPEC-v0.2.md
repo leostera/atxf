@@ -186,7 +186,7 @@ A converter between a format and ATXF satisfies four laws:
 
 - The patch is relative to the converter's writer, so only a writer of the same format applies it; every other consumer may ignore it. Implementations of one converter compute it alike: objects key by key in RFC 8785 key order, arrays of one length element by element, anything else replaced whole, using only `add`, `replace` and `remove`.
 - A writer of the whole tree (`carry: false, tree: true`) writes every record, branches and compacted history included, applying each record's patch. For a format that can hold a tree, a file read, stripped of `native` and written back this way equals the original record by record, as JSON with the order of keys ignored; read again, it gives the same transcript. Formatting (key order, spacing, the spelling of numbers) is what only `native` keeps.
-- A record the format cannot hold is written as the format's extension record carrying it, and read back as itself, so the writer drops nothing.
+- A record the format has no record for is written as the format's extension record carrying it, and read back as itself. A record the format holds only in part is written as the format's record, with the patch that turns the record read from it back into the written one where the agent ignores it (for Pi, the entry's `atxf.patch`). Either way, any transcript written as a whole tree reads back as itself.
 - A reader never refuses a record: one with no ATXF form, or a line that is not even JSON, becomes a `custom` record that holds it, so a stream of a live file keeps going whatever is appended to it.
 - Fields with a meaning beyond one agent belong in ATXF fields, not in the patch, which holds only what is specific to the agent.
 

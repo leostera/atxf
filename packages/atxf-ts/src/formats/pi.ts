@@ -74,7 +74,8 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
     start(first) {
       const value = first?.value;
       if (isObject(value) && value.type === "session" && !context.known.has(0)) {
-        header = withNative(patched(sessionHeader(value), value, sessionEntry), native(first!));
+        const { entry: session, reverse } = unpatched(value);
+        header = withNative(reversed(patched(sessionHeader(session as J), session, sessionEntry), reverse), native(first!));
         return { header, took: true };
       }
       // A file without a session line: the header says so, and the whole-tree writer writes none.
@@ -89,10 +90,12 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
         }
         return undefined;
       }
-      const record = entryRecord(unit, index, tree, context, header!.time, hasContext);
-      if (record.type === "context") hasContext = true;
+      const { entry: value, reverse } = unpatched(entry);
+      const read = entryRecord(value === entry ? unit : { ...unit, value }, index, tree, context, header!.time, hasContext);
       const last = tree.last;
-      return tree.push(isLine(record) ? record : patched(record, entry, (r) => piEntry(r, last)), native(unit));
+      const record = reversed(isLine(read) ? read : patched(read, value, (r) => piEntry(r, last)), reverse);
+      if (record.type === "context") hasContext = true;
+      return tree.push(record, native(unit));
     },
   };
 }
@@ -104,6 +107,26 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
 function patched<R extends EntryRecord | TranscriptHeader>(record: R, value: unknown, write: (record: R) => unknown): R {
   const patch = diff(value, write(record));
   return patch.length === 0 ? record : { ...record, ext: { ...record.ext, pi: { patch } } };
+}
+
+/**
+ * An entry the whole-tree writer wrote, without what it added: `atxf.patch`, the patch that turns the record read
+ * from the entry into the record it was written for, when Pi cannot hold all of it (SPEC §11.2).
+ */
+function unpatched(entry: unknown): { entry: unknown; reverse?: PatchOperation[] } {
+  if (!isObject(entry) || !isObject(entry.atxf) || !Array.isArray(entry.atxf.patch) || Object.keys(entry.atxf).length !== 1) return { entry };
+  const { atxf, ...rest } = entry;
+  return { entry: rest, reverse: atxf.patch as PatchOperation[] };
+}
+
+/** `record` with the reverse patch applied; unpatched when it does not apply. */
+function reversed<R>(record: R, reverse: PatchOperation[] | undefined): R {
+  if (reverse === undefined) return record;
+  try {
+    return applyPatch(record, reverse);
+  } catch {
+    return record;
+  }
 }
 
 function withNative<R extends EntryRecord | TranscriptHeader>(record: R, native: ReturnType<typeof nativeOf> | undefined): R {
@@ -270,7 +293,7 @@ function messageBody(message: unknown, tree: TreeBuilder, time: string): Message
   // Pi's message timestamp is when the message began (the request, for an assistant message); the entry's is when
   // it was written. ATXF keeps the first only when it differs.
   const began = isoTime(message.timestamp, time);
-  const startTime = began === time ? undefined : began;
+  const startTime = millisFromIso(began) === millisFromIso(time) ? undefined : began;
   switch (message.role) {
     case "system":
       return "context";
@@ -614,7 +637,41 @@ function restored(kept: EntryRecord | TranscriptHeader, value: unknown): unknown
   }
 }
 
+/**
+ * Every record as its Pi entry. Each entry is read back, and one whose record does not come back as written gets
+ * `atxf.patch`, which turns the record read into the record written, so a transcript from any source survives
+ * (SPEC §11.2). Pi ignores the `atxf` key, as it does the mark of a carried transcript.
+ */
 function encodeTree(transcript: Transcript): Encoded[] {
+  const out = treeEntries(transcript);
+  const text = out.map((unit) => (unit.raw === undefined ? jsonl.canonical(unit.value) : `${unit.raw}\n`)).join("");
+  const back = pi.toAtxf(text, { integrity: false });
+  const offset = out.length - transcript.records.length;
+  if (back.records.length !== transcript.records.length || offset < 0) return out;
+  const reverse = (unit: Encoded, to: unknown, from: unknown) => {
+    const patch = diff(to, from);
+    if (patch.length > 0 && unit.raw === undefined && isObject(unit.value) && !("atxf" in unit.value)) unit.value = { ...unit.value, atxf: { patch } };
+  };
+  if (offset === 1) reverse(out[0]!, comparableHeader(transcript.header), comparableHeader(back.header));
+  transcript.records.forEach((record, index) => reverse(out[offset + index]!, comparable(record), comparable(back.records[index]!)));
+  return out;
+}
+
+/** What a record keeps when written without native: not native, nor what integrity recomputes. */
+function comparable(record: EntryRecord): J {
+  const { native: _, hash: __, ...rest } = record as J;
+  return rest;
+}
+
+function comparableHeader(header: TranscriptHeader): J {
+  const { native: _, hash: __, integrity: ___, fidelity, ...rest } = header as J;
+  if (fidelity === undefined) return rest;
+  // Whether the transcript holds native records, and the digest of their file, are the reader's to say.
+  const { nativeDigest: ____, native: _____, ...kept } = fidelity as J;
+  return { ...rest, fidelity: kept };
+}
+
+function treeEntries(transcript: Transcript): Encoded[] {
   const kept = transcript.header.ext?.[AGENT] as { session?: boolean } | undefined;
   const out: Encoded[] = kept?.session === false ? [] : [{ value: restored(transcript.header, sessionEntry(transcript.header)), source: null }];
   let last: string | null = null;

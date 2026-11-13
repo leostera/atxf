@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::{Node, obj_or_empty, opt_str, or_else, replay_data, text_blocks};
-use crate::codec::{DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, TreeUnit, carried_value, mark_id};
+use crate::codec::{Converter, DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, TreeUnit, carried_value, mark_id};
 use crate::context::{BuildContextOptions, build_context};
 use crate::json::{self, Get, Map, Obj, Value, amount, count, entries, number, s, to_js_string};
 use crate::native::{Framing, Jsonl, Unit, native_of};
@@ -43,7 +43,12 @@ impl FormatSpec for Pi {
         let header = match units.first().map(|u| &u.value) {
             Some(Value::Object(first)) if first.is("type", "session") && !tree.is_known(0) => {
                 start = 1;
-                let header = patched(session_header(first), &units[0].value, session_entry);
+                let (session, reverse) = match unpatched(&units[0].value) {
+                    Some((session, reverse)) => (session, Some(reverse)),
+                    None => (units[0].value.clone(), None),
+                };
+                let header = patched(session_header(&obj_or_empty(Some(&session))), &session, session_entry);
+                let header = reversed(header, reverse.as_ref());
                 Obj::new().spread(&header).set("native", Value::Object(native(&units[0]))).build()
             }
             // A file without a session line: the header says so, and the whole-tree writer writes none.
@@ -63,12 +68,18 @@ impl FormatSpec for Pi {
                 }
                 continue;
             }
-            let record = entry_record(unit, index, &mut tree, &fallback_time, has_context);
+            let stripped = unpatched(entry).map(|(value, reverse)| (Unit { value, raw: unit.raw.clone() }, reverse));
+            let (read_from, reverse) = match &stripped {
+                Some((unit, reverse)) => (unit, Some(reverse)),
+                None => (unit, None),
+            };
+            let read = entry_record(read_from, index, &mut tree, &fallback_time, has_context);
+            let last = tree.last.clone();
+            let record = if is_line(&read) { read } else { patched(read, &read_from.value, |r| pi_entry(r, last.as_deref())) };
+            let record = reversed(record, reverse);
             if record.kind() == "context" {
                 has_context = true;
             }
-            let last = tree.last.clone();
-            let record = if is_line(&record) { record } else { patched(record, entry, |r| pi_entry(r, last.as_deref())) };
             tree.push(record, Some(native(unit)));
         }
         Decoded { header, records: tree.records }
@@ -127,6 +138,26 @@ fn patched(mut record: Map, value: &Value, write: impl FnOnce(&Map) -> Value) ->
         ext.insert(AGENT.to_string(), Obj::new().set("patch", Value::Array(patch)).value());
     }
     record
+}
+
+/// An entry the whole-tree writer wrote, without what it added: `atxf.patch`, the patch that turns the record read
+/// from the entry into the record it was written for, when Pi cannot hold all of it (SPEC §11.2).
+fn unpatched(entry: &Value) -> Option<(Value, Vec<Value>)> {
+    let atxf = entry.obj("atxf").filter(|atxf| atxf.len() == 1)?;
+    let patch = atxf.arr("patch")?.clone();
+    let mut rest = entry.as_object()?.clone();
+    rest.shift_remove("atxf");
+    Some((Value::Object(rest), patch))
+}
+
+/// `record` with the reverse patch applied; unpatched when it does not apply.
+fn reversed(record: Map, reverse: Option<&Vec<Value>>) -> Map {
+    let Some(reverse) = reverse else { return record };
+    let record = Value::Object(record);
+    match (apply(&record, reverse), record) {
+        (Some(Value::Object(patched)), _) | (_, Value::Object(patched)) => patched,
+        _ => Map::new(),
+    }
 }
 
 fn is_line(record: &Map) -> bool {
@@ -341,7 +372,7 @@ fn message_body(message: Option<&Value>, tree: &TreeBuilder<'_>, time: &str) -> 
     // Pi's message timestamp is when the message began (the request, for an assistant message); the entry's is when
     // it was written. ATXF keeps the first only when it differs.
     let began = iso_time(message.field("timestamp"), time);
-    let start_time = (began != time).then_some(began);
+    let start_time = (millis_from_iso(&began) != millis_from_iso(time)).then_some(began);
     match message.str("role")? {
         "system" => Some(Body::Context),
         "user" => Some(Body::Message(
@@ -812,7 +843,63 @@ fn restored(kept: &Map, value: Value) -> Value {
     }
 }
 
+/// Every record as its Pi entry. Each entry is read back, and one whose record does not come back as written gets
+/// `atxf.patch`, which turns the record read into the record written, so a transcript from any source survives
+/// (SPEC §11.2). Pi ignores the `atxf` key, as it does the mark of a carried transcript.
 fn encode_tree(transcript: &Transcript) -> Vec<TreeUnit> {
+    let mut out = tree_entries(transcript);
+    let text: String = out
+        .iter()
+        .map(|unit| match unit {
+            TreeUnit::Value(value) => Jsonl.canonical(value),
+            TreeUnit::Raw(text) => format!("{text}\n"),
+        })
+        .collect();
+    let Ok(back) = Converter::to_atxf(&Pi, &text, false) else { return out };
+    let Some(offset) = out.len().checked_sub(transcript.records.len()) else { return out };
+    if back.records.len() != transcript.records.len() {
+        return out;
+    }
+    let reverse = |unit: &mut TreeUnit, to: Value, from: Value| {
+        let patch = diff(&to, &from);
+        if let TreeUnit::Value(Value::Object(entry)) = unit
+            && !patch.is_empty()
+            && !entry.contains_key("atxf")
+        {
+            entry.insert("atxf".to_string(), Obj::new().set("patch", Value::Array(patch)).value());
+        }
+    };
+    if offset == 1 {
+        reverse(&mut out[0], comparable_header(&transcript.header), comparable_header(&back.header));
+    }
+    for (index, (record, read)) in transcript.records.iter().zip(&back.records).enumerate() {
+        reverse(&mut out[offset + index], comparable(record), comparable(read));
+    }
+    out
+}
+
+/// What a record keeps when written without native: not native, nor what integrity recomputes.
+fn comparable(record: &Map) -> Value {
+    let mut record = record.clone();
+    record.shift_remove("native");
+    record.shift_remove("hash");
+    Value::Object(record)
+}
+
+fn comparable_header(header: &Map) -> Value {
+    let mut header = header.clone();
+    for key in ["native", "hash", "integrity"] {
+        header.shift_remove(key);
+    }
+    // Whether the transcript holds native records, and the digest of their file, are the reader's to say.
+    if let Some(Value::Object(fidelity)) = header.shift_remove("fidelity") {
+        let kept: Map = fidelity.into_iter().filter(|(k, _)| k != "nativeDigest" && k != "native").collect();
+        header.insert("fidelity".to_string(), Value::Object(kept));
+    }
+    Value::Object(header)
+}
+
+fn tree_entries(transcript: &Transcript) -> Vec<TreeUnit> {
     let header = &transcript.header;
     let mut out = Vec::with_capacity(transcript.records.len() + 1);
     if header.obj("ext").and_then(|ext| ext.obj(AGENT)).and_then(|pi| pi.bool("session")) != Some(false) {

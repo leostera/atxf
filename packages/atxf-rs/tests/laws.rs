@@ -117,6 +117,36 @@ fn without_native_a_fixture_writes_back_every_entry_and_reads_back_the_same() {
     }
 }
 
+/// `stripped`, without what the reader says of native records, a `fidelity` left empty, or hashes and seals.
+fn comparable(transcript: &Transcript) -> Transcript {
+    let mut transcript = stripped(transcript);
+    if let Some(Value::Object(fidelity)) = transcript.header.get_mut("fidelity") {
+        fidelity.shift_remove("native");
+        if fidelity.is_empty() {
+            transcript.header.shift_remove("fidelity");
+        }
+    }
+    transcript.header.shift_remove("integrity");
+    transcript.header.shift_remove("hash");
+    for record in &mut transcript.records {
+        record.shift_remove("hash");
+    }
+    transcript
+}
+
+#[test]
+fn without_native_any_transcript_written_as_a_whole_tree_reads_back_as_itself() {
+    for (name, transcript) in examples() {
+        for format in formats::all() {
+            let Some(written) = format.from_atxf_tree(&transcript) else { continue };
+            let back = format.to_atxf(&written, false).expect("decodes");
+            // Equal as JSON: a patch restores values, and the order of keys is what only native keeps.
+            let (back, expected) = (comparable(&back).to_value(), comparable(&transcript).to_value());
+            assert!(json_equal(&back, &expected), "{name} through {}:\n{back}\n{expected}", format.agent());
+        }
+    }
+}
+
 #[test]
 fn carry_restores_any_transcript_through_any_format() {
     for (name, transcript) in examples() {
