@@ -1,6 +1,6 @@
 {
   "name": "@leostera/pi-atxf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension for ATXF: export and import sessions, and join a session shared with other agents",
   "license": "MIT",
   "author": "Leo Ostera",
@@ -28,7 +28,7 @@
     ]
   },
   "dependencies": {
-    "@leostera/atxf": "^0.2.0"
+    "@leostera/atxf": "^0.4.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
