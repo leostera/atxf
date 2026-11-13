@@ -34,6 +34,8 @@ export interface Usage {
   output: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Of `cacheWrite`, the tokens written to a cache kept for one hour. */
+  cacheWrite1h?: number;
   reasoning?: number;
   total?: number;
   cost?: Cost;
@@ -110,12 +112,16 @@ export interface SystemBody {
   content: UserContent;
   origin?: Origin;
   display?: boolean;
+  /** When the message began, when that is not the record's `time` (SPEC §12.1). */
+  startTime?: string;
 }
 export interface UserBody {
   role: "user";
   content: UserContent;
   origin?: Origin;
   display?: boolean;
+  /** When the message began, when that is not the record's `time` (SPEC §12.1). */
+  startTime?: string;
 }
 export interface AssistantBody {
   role: "assistant";
@@ -127,8 +133,18 @@ export interface AssistantBody {
   stop?: StopReason;
   rawStop?: string;
   responseId?: string;
+  /** The model the provider says answered, when it names it differently from `model.id`. */
+  responseModel?: string;
+  /** The reasoning effort the agent asked for, in its own terms (SPEC §12.1). */
+  reasoningEffort?: string;
+  /** The reasoning effort sent to the provider, in the provider's terms. */
+  providerReasoningEffort?: string;
   error?: ErrorInfo;
   replay?: Replay[];
+  /** When the request was sent, when that is not the record's `time`. */
+  startTime?: string;
+  /** How long the response took, in milliseconds. */
+  durationMs?: number;
 }
 export interface ToolBody {
   role: "tool";
@@ -137,8 +153,30 @@ export interface ToolBody {
   content: UserContent;
   isError?: boolean;
   details?: Record<string, unknown>;
+  /** Calls the tool made to other tools while it ran (SPEC §8). Never model context. */
+  nestedCalls?: NestedCalls;
   origin?: Origin;
   display?: boolean;
+  /** When the tool started, when that is not the record's `time`. */
+  startTime?: string;
+  /** How long the tool ran, in milliseconds. */
+  durationMs?: number;
+}
+export interface NestedCall {
+  id: string;
+  name: string;
+  arguments?: Record<string, unknown>;
+  /** UTF-8 size of the arguments as JSON, when `arguments` was left out for its size. */
+  argumentsBytes?: number;
+  /** `unfinished`: still running when the calling tool finished. */
+  status: "ok" | "error" | "unfinished";
+  durationMs?: number;
+  error?: string;
+}
+export interface NestedCalls {
+  calls: NestedCall[];
+  /** False when calls were dropped, arguments left out, or calls had not finished. */
+  complete: boolean;
 }
 export type MessageBody = SystemBody | UserBody | AssistantBody | ToolBody;
 
@@ -237,6 +275,8 @@ export interface CompactionRecord extends Node {
   snapshot?: ContextSnapshot;
   reason?: "auto" | "manual";
   tokensBefore?: number;
+  /** The files the compacted history read and modified, as the producer tracked them. */
+  files?: { read?: string[]; modified?: string[] };
   model?: ModelRef;
   usage?: Usage;
   replay?: Replay[];

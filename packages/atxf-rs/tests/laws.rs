@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use atxf::equivalence::{conversation_view, format_view};
 use atxf::integrity::{add_integrity, prove_inclusion, verify_inclusion, verify_integrity};
 use atxf::json::Value;
+use atxf::patch::json_equal;
 use atxf::reconcile::{in_sync, reconcile};
 use atxf::transcript::Record;
 use atxf::{Severity, Transcript, formats, parse_transcript, serialize_transcript, validate_transcript};
@@ -20,12 +21,13 @@ fn read(path: &str) -> String {
     std::fs::read_to_string(repo().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
-const FIXTURES: [(&str, &str); 5] = [
+const FIXTURES: [(&str, &str); 6] = [
     ("claude-code", "fixtures/claude-code/harbor-hello.jsonl"),
     ("codex", "fixtures/codex/rollout-hand-built.jsonl"),
     ("gemini-cli", "fixtures/gemini-cli/session-hand-built.jsonl"),
     ("opencode", "fixtures/opencode/export-hand-built.json"),
     ("opencode", "fixtures/opencode/export-2.0.20.json"),
+    ("pi", "fixtures/pi/session-every-field.jsonl"),
 ];
 
 fn examples() -> Vec<(String, Transcript)> {
@@ -75,6 +77,43 @@ fn fixtures_round_trip_byte_for_byte_and_decode_to_valid_transcripts() {
         let transcript = format.to_atxf(&text, true).expect("decodes");
         assert_eq!(format.from_atxf(&transcript, true).expect("encodes"), text, "{path}");
         assert_eq!(errors(&serialize_transcript(&transcript)), Vec::<String>::new(), "{path}");
+    }
+}
+
+/// The transcript without `native` on its header and records, nor the digest of the file it was read from: what
+/// remains when native is dropped.
+fn stripped(transcript: &Transcript) -> Transcript {
+    let strip = |map: &atxf::json::Map| {
+        let mut map = map.clone();
+        map.shift_remove("native");
+        map
+    };
+    // The digest is of the file's bytes, which a file written without native need not reproduce.
+    let mut header = strip(&transcript.header);
+    if let Some(Value::Object(fidelity)) = header.get_mut("fidelity") {
+        fidelity.shift_remove("nativeDigest");
+    }
+    Transcript { header, records: transcript.records.iter().map(strip).collect() }
+}
+
+fn entries(text: &str) -> Vec<Value> {
+    text.lines().filter(|l| !l.trim().is_empty()).map(|l| atxf::json::parse(l).unwrap_or_else(|_| Value::String(l.to_string()))).collect()
+}
+
+#[test]
+fn without_native_a_fixture_writes_back_every_entry_and_reads_back_the_same() {
+    for (agent, path) in FIXTURES {
+        let format = formats::by_agent(agent).expect("agent");
+        let text = read(path);
+        let transcript = stripped(&format.to_atxf(&text, false).expect("decodes"));
+        let Some(written) = format.from_atxf_tree(&transcript) else { continue };
+        let (back, original) = (entries(&written), entries(&text));
+        assert_eq!(back.len(), original.len(), "{path}");
+        for (index, (a, b)) in back.iter().zip(&original).enumerate() {
+            assert!(json_equal(a, b), "{path}: entry {} differs:\n{a}\n{b}", index + 1);
+        }
+        let again = stripped(&format.to_atxf(&written, false).expect("decodes again"));
+        assert_eq!(serialize_transcript(&again), serialize_transcript(&transcript), "{path}");
     }
 }
 

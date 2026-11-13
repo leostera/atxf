@@ -10,7 +10,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage:
   atxf validate <file.atxf.jsonl>...
-  atxf convert --from <agent|atxf> --to <agent|atxf> [--no-carry] <file>      writes to stdout
+  atxf convert --from <agent|atxf> --to <agent|atxf> [--no-carry [--tree]] <file>      writes to stdout
   atxf reconcile <copy.atxf.jsonl>...                                           writes to stdout
 
 agents: {}",
@@ -73,7 +73,8 @@ fn convert(mut args: Vec<String>) -> Result<ExitCode, String> {
     let from = option("--from");
     let to = option("--to");
     let carry = !args.iter().any(|a| a == "--no-carry");
-    let file = args.iter().find(|a| *a != "--no-carry");
+    let tree = args.iter().any(|a| a == "--tree");
+    let file = args.iter().find(|a| *a != "--no-carry" && *a != "--tree");
     let known = |name: &Option<String>| name.as_deref().is_some_and(|n| n == "atxf" || formats::by_agent(n).is_some());
     let (true, true, Some(file)) = (known(&from), known(&to), file) else { return Ok(usage()) };
     let (from, to) = (from.unwrap_or_default(), to.unwrap_or_default());
@@ -84,7 +85,13 @@ fn convert(mut args: Vec<String>) -> Result<ExitCode, String> {
     }
     .map_err(|e| e.to_string())?;
     let out = match formats::by_agent(&to) {
-        Some(format) => format.from_atxf(&transcript, carry).map_err(|e| e.to_string())?,
+        Some(format) => match (carry, tree) {
+            (false, true) => match format.from_atxf_tree(&transcript) {
+                Some(text) => text,
+                None => format.from_atxf(&transcript, false).map_err(|e| e.to_string())?,
+            },
+            _ => format.from_atxf(&transcript, carry).map_err(|e| e.to_string())?,
+        },
         None => serialize_transcript(&transcript),
     };
     write_stdout(&out)?;

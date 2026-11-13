@@ -43,6 +43,7 @@ inputs=(
   "gemini-cli:fixtures/gemini-cli/session-hand-built.jsonl"
   "opencode:fixtures/opencode/export-hand-built.json"
   "opencode:fixtures/opencode/export-2.0.20.json"
+  "pi:fixtures/pi/session-every-field.jsonl"
 )
 for example in examples/*.atxf.jsonl; do inputs+=("atxf:$example"); done
 inputs+=("$@")
@@ -51,7 +52,7 @@ for input in "${inputs[@]}"; do
   from=${input%%:*}
   file=${input#*:}
   for to in atxf "${agents[@]}"; do
-    for carry in "" --no-carry; do
+    for carry in "" --no-carry "--no-carry --tree"; do
       [[ $to == atxf && -n $carry ]] && continue
       compare "$from→$to $carry $file" convert --from "$from" --to "$to" $carry "$file"
       # Back again, through the other side's output, so decode sees encoded output too.

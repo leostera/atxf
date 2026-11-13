@@ -17,6 +17,7 @@ pub mod formats;
 pub mod integrity;
 pub mod json;
 pub mod native;
+pub mod patch;
 pub mod reconcile;
 pub mod time;
 pub mod transcript;

@@ -33,19 +33,32 @@ describe("pi.stream", () => {
     expect(reading.header).toMatchObject({ id: "pi-session" });
   });
 
-  test("blank lines, embedded newlines and lines carrying a transcript are refused", () => {
-    const reading = pi.stream!();
-    expect(() => reading.push("")).toThrow(RangeError);
-    expect(() => reading.push("  ")).toThrow(RangeError);
-    expect(() => reading.push(`${session}\n${session}`)).toThrow(RangeError);
-    const carrying = JSON.stringify({ ...JSON.parse(session), atxf: { id: null, transcript: { header: {}, records: [] } } });
-    expect(() => reading.push(carrying)).toThrow(RangeError);
+  test("no line is refused: blank lines add nothing, and text with several lines is read a line at a time", () => {
+    const reading = pi.stream!({ integrity: false });
+    expect(reading.push("")).toEqual([]);
+    expect(reading.push("  ")).toEqual([]);
+    expect(reading.push(`${session}\n${user("a", null, "hi")}\n`)).toHaveLength(1);
+    expect(reading.header).toMatchObject({ id: "s-1" });
   });
 
-  test("a line that is not JSON is kept verbatim as a record", () => {
+  test("a line carrying a transcript is read as its entry, and writes back with what it carries", () => {
+    const carried = { header: { type: "transcript", atxf: "0.1", id: "t", time: "2026-11-08T10:00:00.000Z", source: { agent: "x" } }, records: [] };
+    const line = JSON.stringify({ ...JSON.parse(user("a", null, "hi")), atxf: { id: null, transcript: carried } });
+    const reading = pi.stream!({ integrity: false });
+    reading.push(session);
+    const [record] = reading.push(line);
+    expect(record).toMatchObject({ type: "message", id: "a", role: "user" });
+    const written = pi.fromAtxf({ header: reading.header!, records: [{ ...record!, native: undefined } as never] }, { carry: false, tree: true });
+    expect(JSON.parse(written.split("\n")[1]!)).toEqual(JSON.parse(line));
+  });
+
+  test("a line that is not JSON is kept verbatim as a record, natively and without native", () => {
     const reading = pi.stream!();
     reading.push(session);
     const [record] = reading.push("not json");
     expect(record!.native).toMatchObject({ source: "pi", records: [null], raw: ["not json\n"] });
+    expect(record).toMatchObject({ type: "custom", namespace: "pi.line", data: { text: "not json" } });
+    const { native: _, ...bare } = record!;
+    expect(pi.fromAtxf({ header: reading.header!, records: [bare as never] }, { carry: false, tree: true }).split("\n")[1]).toBe("not json");
   });
 });

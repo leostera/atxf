@@ -19,6 +19,11 @@ import type { Transcript } from "./types.ts";
  */
 export interface FidelityReport {
   files: number;
+  /**
+   * Files that carry an ATXF transcript (written by `fromAtxf`), which read as that transcript (SPEC §11.1, law 3)
+   * rather than as their own entries. Not compared.
+   */
+  carried: number;
   entries: number;
   /** Entries written back equal to the original. */
   equal: number;
@@ -36,7 +41,7 @@ export interface FidelityReport {
 }
 
 export function emptyFidelity(): FidelityReport {
-  return { files: 0, entries: 0, equal: 0, missingEntries: {}, addedEntries: {}, missing: {}, added: {}, ext: {}, unstable: 0, errors: {} };
+  return { files: 0, carried: 0, entries: 0, equal: 0, missingEntries: {}, addedEntries: {}, missing: {}, added: {}, ext: {}, unstable: 0, errors: {} };
 }
 
 export interface FidelityOptions {
@@ -54,6 +59,10 @@ const defaultKey = (entry: unknown): string => {
 export function addFidelity(into: FidelityReport, converter: Converter, text: string, options: FidelityOptions = {}): FidelityReport {
   const key = options.key ?? defaultKey;
   into.files += 1;
+  if (carriesTranscript(text)) {
+    into.carried += 1;
+    return into;
+  }
   let transcript: Transcript;
   let written: string;
   try {
@@ -63,13 +72,12 @@ export function addFidelity(into: FidelityReport, converter: Converter, text: st
     count(into.errors, error instanceof Error ? error.message.slice(0, 120) : String(error));
     return into;
   }
-  const original = lines(text);
+  const original = keyed(lines(text), key);
   const back = new Map<string, unknown>();
-  for (const entry of lines(written)) back.set(key(entry), entry);
+  for (const [k, entry] of keyed(lines(written), key)) back.set(k, entry);
   into.entries += original.length;
   const seen = new Set<string>();
-  for (const entry of original) {
-    const k = key(entry);
+  for (const [k, entry] of original) {
     seen.add(k);
     const type = typeOf(entry);
     if (!back.has(k)) {
@@ -105,6 +113,7 @@ export function mergeFidelity(a: FidelityReport, b: FidelityReport): FidelityRep
   };
   return {
     files: a.files + b.files,
+    carried: a.carried + b.carried,
     entries: a.entries + b.entries,
     equal: a.equal + b.equal,
     missingEntries: sum(a.missingEntries, b.missingEntries),
@@ -126,7 +135,7 @@ export function isLossless(report: FidelityReport): boolean {
 /** The report as text: totals, then each table, largest first. */
 export function formatFidelity(agent: string, report: FidelityReport): string {
   const out = [
-    `${agent}: ${report.files} file(s), ${report.entries} entries, ${report.equal} written back equal, ${report.unstable} unstable through ATXF`,
+    `${agent}: ${report.files} file(s) (${report.carried} carrying a transcript, not compared), ${report.entries} entries, ${report.equal} written back equal, ${report.unstable} unstable through ATXF`,
   ];
   const table = (title: string, rows: Record<string, number>) => {
     const entries = Object.entries(rows).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
@@ -142,11 +151,42 @@ export function formatFidelity(agent: string, report: FidelityReport): string {
   return out.join("\n");
 }
 
+/** Whether a line of the file carries a transcript in an `atxf` key, as `fromAtxf` writes it. */
+function carriesTranscript(text: string): boolean {
+  return text.split("\n").some((line) => {
+    if (!line.includes('"atxf"')) return false;
+    try {
+      const value = JSON.parse(line);
+      return typeof value?.atxf?.transcript === "object" && value.atxf.transcript !== null;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Each non-blank line's value; a line that is not JSON is compared as its text. */
 function lines(text: string): unknown[] {
   return text
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line));
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return { type: "<not json>", line };
+      }
+    });
+}
+
+/** Entries under their keys; an entry whose key an earlier one has is told apart by how many came before. */
+function keyed(entries: unknown[], key: (entry: unknown) => string): [string, unknown][] {
+  const seen = new Map<string, number>();
+  return entries.map((entry) => {
+    const k = key(entry);
+    const n = seen.get(k) ?? 0;
+    seen.set(k, n + 1);
+    return [n === 0 ? k : `${k}#${n}`, entry];
+  });
 }
 
 function typeOf(entry: unknown): string {

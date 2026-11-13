@@ -31,6 +31,12 @@ export interface FormatSpec {
    * `options.sessionId` is the native session the records will be loaded as (see `FromAtxfOptions`).
    */
   encode(transcript: Transcript, options: { sessionId?: string }): Encoded[];
+  /**
+   * Every record of the transcript, in file order, for formats that can hold a tree (`carry: false, tree: true`).
+   * A record read from this format is written as the entry it was read from, restored with what it keeps in
+   * `ext.<agent>.patch` (SPEC §11.2).
+   */
+  encodeTree?(transcript: Transcript): Encoded[];
   carrier: Carrier;
   /**
    * Reads units one at a time, holding no records, for line-framed formats whose records never change once
@@ -49,6 +55,8 @@ export interface FormatReader {
 
 export interface Encoded {
   value: unknown;
+  /** The exact line, without its newline, for a value that cannot be printed (a line that was not JSON). */
+  raw?: string;
   /** The ATXF record this native record stands for, or `null` for one with no single counterpart. */
   source: string | null;
 }
@@ -119,6 +127,10 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
       const digest = transcript.header.fidelity?.nativeDigest;
       if (digest !== undefined ? digest === nativeDigest(text) : sameRecords(toAtxf(text, { integrity: false }), transcript)) return text;
     }
+    if (!carry && options.tree && spec.encodeTree) {
+      const units = spec.encodeTree(transcript).map(({ value, raw }) => ({ value, raw: raw === undefined ? spec.framing.canonical(value) : `${raw}\n` }));
+      return spec.framing.print(units);
+    }
     const encoded = spec.encode(transcript, { sessionId: options.sessionId });
     const values = carry
       ? spec.carrier.attach(
@@ -143,9 +155,11 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
           return hasher?.header ?? header;
         },
         push(line) {
-          if (line.trim() === "" || line.includes("\n")) throw new RangeError("a stream reads one record per line; blank lines belong to a file");
+          // Every line converts: a stream never refuses one, so a reader of a live file never stops. Blank lines
+          // hold no record. A line carrying a transcript is read as the entry it is, the transcript kept with it.
+          if (line.includes("\n")) return line.split("\n").flatMap((part) => this.push(part));
+          if (line.trim() === "") return [];
           const unit = spec.framing.parse(`${line}\n`)[0]!;
-          if (spec.carrier.detach([unit])) throw new RangeError("a line carrying a transcript is read with toAtxf, with the rest of its file");
           if (header === undefined) {
             const started = read.start(unit);
             header = started.header;
@@ -163,7 +177,7 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
       };
     });
 
-  return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf, ...(stream ? { stream } : {}) };
+  return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf, ...(stream ? { stream } : {}), ...(spec.encodeTree ? { tree: true } : {}) };
 }
 
 /** The digest of a native file, recorded in `fidelity.nativeDigest` of the transcript read from it. */

@@ -41,6 +41,18 @@ pub trait Converter: Sync {
     /// `source.sessionId`, else its id. (`sessionId` of `FromAtxfOptions` in the TypeScript API.)
     #[allow(clippy::wrong_self_convention)]
     fn from_atxf_for(&self, transcript: &Transcript, carry: bool, session_id: Option<&str>) -> Result<String, Error>;
+    /// Writes every record of the transcript as native session text, without the carried transcript (SPEC §11.2):
+    /// a record read from this format is written as the entry it was read from. `None` for a format that cannot
+    /// hold a tree. (`carry: false, tree: true` in the TypeScript API.)
+    #[allow(clippy::wrong_self_convention)]
+    fn from_atxf_tree(&self, transcript: &Transcript) -> Option<String>;
+}
+
+/// A native unit written by `FormatSpec::encode_tree`: a value, or the exact text of a line that was not JSON.
+#[derive(Clone, Debug)]
+pub enum TreeUnit {
+    Value(Value),
+    Raw(String),
 }
 
 /// A native record written for an ATXF transcript, with the ATXF record it stands for (`None` for one with no
@@ -79,6 +91,11 @@ pub trait FormatSpec: Sync {
     /// The format's records for the transcript's active context. `session_id` is the native session the records
     /// will be loaded as (see `Converter::from_atxf_for`).
     fn encode(&self, transcript: &Transcript, session_id: Option<&str>) -> Vec<Encoded>;
+    /// Every record of the transcript, in file order, for formats that can hold a tree. A record read from this
+    /// format is written as the entry it was read from, restored with what it keeps in `ext.<agent>.patch`.
+    fn encode_tree(&self, _transcript: &Transcript) -> Option<Vec<TreeUnit>> {
+        None
+    }
     /// The value with a mark naming the ATXF record it stands for.
     fn mark(&self, value: Value, source: Option<&str>) -> Value;
     /// The mark's ATXF id: `Some(Some(id))`, `Some(None)` for a mark without one, `None` for an unmarked record.
@@ -189,6 +206,19 @@ impl<T: FormatSpec> Converter for T {
         };
         let units: Vec<Unit> = values.into_iter().map(|value| Unit { raw: framing.canonical(&value), value }).collect();
         Ok(framing.print(&units))
+    }
+
+    fn from_atxf_tree(&self, transcript: &Transcript) -> Option<String> {
+        let framing = self.framing();
+        let units: Vec<Unit> = self
+            .encode_tree(transcript)?
+            .into_iter()
+            .map(|unit| match unit {
+                TreeUnit::Value(value) => Unit { raw: framing.canonical(&value), value },
+                TreeUnit::Raw(text) => Unit { raw: format!("{text}\n"), value: Value::Null },
+            })
+            .collect();
+        Some(framing.print(&units))
     }
 }
 

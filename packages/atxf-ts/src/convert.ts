@@ -24,6 +24,8 @@ export interface Converter {
    * records never change once written.
    */
   stream?(options?: { integrity?: boolean }): TranscriptStream;
+  /** Whether `fromAtxf` can write the whole tree (`carry: false, tree: true`), keeping what native held (SPEC §11.2). */
+  readonly tree?: boolean;
 }
 
 /**
@@ -37,9 +39,11 @@ export interface TranscriptStream {
   /** The header, once the first line has been read. */
   readonly header: TranscriptHeader | undefined;
   /**
-   * Reads the next line, without its newline, and returns the records it adds: none for a line the header took.
-   * Throws a `RangeError` for a blank line or one holding a newline (a stream reads records, not text), and for
-   * a line carrying a transcript, which only `toAtxf` reads.
+   * Reads the next line, without its newline, and returns the records it adds: none for a line the header took or
+   * a blank one. Never throws for what a line holds: a line that is not JSON, or has no ATXF form, becomes a custom
+   * record that writes it back (SPEC §11.2), and text holding several lines is read a line at a time. A line
+   * carrying a transcript, as `fromAtxf` writes it, is read as the entry it is, not as the transcript: only
+   * `toAtxf` reads the carried transcript, with the rest of its file.
    */
   push(line: string): EntryRecord[];
 }

@@ -53,6 +53,11 @@ fc.assert(
       const native = formats[agent].fromAtxf(transcript, { carry });
       if (!same(`atxf→${agent} ${flags}`, native, rs(["convert", "--from", "atxf", "--to", agent, ...flags], text).out, text)) continue;
       same(`${agent}→atxf`, serializeTranscript(formats[agent].toAtxf(native)), rs(["convert", "--from", agent, "--to", "atxf"], native).out, native);
+      if (formats[agent].tree) {
+        const tree = formats[agent].fromAtxf(transcript, { carry: false, tree: true });
+        if (!same(`atxf→${agent} --no-carry --tree`, tree, rs(["convert", "--from", "atxf", "--to", agent, "--no-carry", "--tree"], text).out, text)) continue;
+        same(`${agent} tree→atxf`, serializeTranscript(formats[agent].toAtxf(tree)), rs(["convert", "--from", agent, "--to", "atxf"], tree).out, tree);
+      }
     }
     return true;
   }),
@@ -70,6 +75,10 @@ for (const agent of agents) {
       const decoded = formats[agent].toAtxf(native);
       same(`noisy ${agent}→atxf`, serializeTranscript(decoded), rs(["convert", "--from", agent, "--to", "atxf"], native).out, native);
       same(`noisy ${agent}→${agent}`, formats[agent].fromAtxf(decoded), rs(["convert", "--from", agent, "--to", agent], native).out, native);
+      if (formats[agent].tree) {
+        const tree = formats[agent].fromAtxf(decoded, { carry: false, tree: true });
+        same(`noisy ${agent}→${agent} --no-carry --tree`, tree, rs(["convert", "--from", agent, "--to", agent, "--no-carry", "--tree"], native).out, native);
+      }
       return true;
     }),
     { numRuns: Math.ceil(runs / 2) },

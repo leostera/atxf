@@ -3,6 +3,7 @@ import fc from "fast-check";
 import type { Converter } from "./convert.ts";
 import { conversationView, type PortableMessage } from "./equivalence.ts";
 import { addIntegrity } from "./integrity.ts";
+import { addFidelity, emptyFidelity, formatFidelity, isLossless } from "./fidelity.ts";
 import { serializeTranscript } from "./jsonl.ts";
 import { arbitraryTranscript, noisyJsonl, normalize } from "./testing.ts";
 import type { Transcript } from "./types.ts";
@@ -28,6 +29,9 @@ export interface LawOptions {
  * 4. **Faithful view:** written without the carried transcript, the file still holds the same conversation.
  * 5. **Streaming,** for a converter that can `stream`: pushing a file's lines one at a time returns `toAtxf`'s
  *    records, and its header without `fidelity.nativeDigest`; the streamed transcript writes back the same file.
+ * 6. **Without native,** for a converter that writes whole trees (SPEC §11.2): a native file read, stripped of
+ *    `native` and written as a whole tree equals the original entry by entry, as JSON; read again, it gives the
+ *    same transcript. Any transcript written as a whole tree keeps every record, by id and type, in order.
  */
 export function describeConverterLaws(converter: Converter, options: LawOptions = {}) {
   const runs = options.runs ?? Number(process.env.ATXF_RUNS ?? 100);
@@ -101,6 +105,35 @@ export function describeConverterLaws(converter: Converter, options: LawOptions 
 
       test("streaming: a streamed transcript writes back the file it was read from", () => {
         fc.assert(fc.property(appended, (text) => converter.fromAtxf(streamed(text)) === text), { numRuns: runs });
+      });
+    }
+
+    if (converter.tree) {
+      for (const fixture of options.fixtures ?? []) {
+        test(`without native: fixture ${fixture.name} writes back every entry, and reads back the same`, () => {
+          const report = addFidelity(emptyFidelity(), converter, fixture.text);
+          expect(isLossless(report) ? "lossless" : formatFidelity(converter.agent, report)).toBe("lossless");
+        });
+      }
+
+      test("without native: a native file, stripped and written as a whole tree, writes back every entry", () => {
+        fc.assert(
+          fc.property(nativeFiles, (text) => {
+            const report = addFidelity(emptyFidelity(), converter, text);
+            expect(isLossless(report) ? "lossless" : formatFidelity(converter.agent, report)).toBe("lossless");
+          }),
+          { numRuns: runs },
+        );
+      });
+
+      test("without native: any transcript written as a whole tree keeps every record, by id and type", () => {
+        fc.assert(
+          fc.property(arbitraryTranscript({ integrity: false }), (t) => {
+            const back = converter.toAtxf(converter.fromAtxf(t, { carry: false, tree: true }), { integrity: false });
+            expect(back.records.map((r) => `${r.type}:${r.id}`)).toEqual(t.records.map((r) => `${r.type}:${r.id}`));
+          }),
+          { numRuns: runs },
+        );
       });
     }
 

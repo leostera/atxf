@@ -137,6 +137,7 @@ The effective settings at a point are obtained by folding the `settings` records
 - **`replace`** swaps in a complete new base (Codex `replacement_history`, OpenCode provider compaction). Provider-encrypted compaction state goes in the compaction's `replay`.
 - In both cases the compacted records stay in the file, so consumers MAY show them.
 - `usage` on a compaction is the cost of producing it. It MUST be counted in transcript totals.
+- `files` lists the files the compacted history read and modified, as the producer tracked them, so a summary can be continued without rereading the history to find them.
 
 ## 8. Tool calls
 
@@ -145,6 +146,7 @@ The effective settings at a point are obtained by folding the `settings` records
   - `function`: has JSON `arguments`.
   - `custom`: has free-form `input`.
   - `builtin`: provider-hosted tools, e.g. web search.
+- `nestedCalls` on a tool result records the calls the tool itself made to other tools while it ran, as a script does: each call's id, name, arguments (or only their size), status and duration, and whether the record is complete. It is a record of what happened, never model context: the model made one call, and sees one result. Results of nested calls are not recorded.
 - `tool_status` records are OPTIONAL lifecycle events: pending, approved/denied, running, completed/error/cancelled. A call that never ran (denied, aborted) MAY have a `tool_status` but no result message.
 
 ## 9. Turns
@@ -178,6 +180,16 @@ A converter between a format and ATXF satisfies four laws:
 3. **Carry.** Writing any transcript for another agent and reading it back returns the transcript. The written file holds the agent's own records for the active context (§5), each marked with the ATXF id it stands for, and carries the whole transcript in a place the agent ignores. Records the agent appends later have no mark; they are read and attached at the carried transcript's active leaf.
 4. **Faithful view.** Writing without the carried transcript (`carry: false`) keeps the conversation (`conversationView`), up to what the format cannot express.
 
+### 11.2 Without native
+
+`native` reproduces a file byte for byte, but it doubles what a transcript holds, and a consumer that drops it to store or share less should lose nothing it can name. A converter therefore maps every field of a native record it can to ATXF fields, and keeps the rest in `ext.<agent>.patch`: a JSON Patch (RFC 6902) that turns the native record the converter writes for the ATXF record into the native record it read.
+
+- The patch is relative to the converter's writer, so only a writer of the same format applies it; every other consumer may ignore it. Implementations of one converter compute it alike: objects key by key in RFC 8785 key order, arrays of one length element by element, anything else replaced whole, using only `add`, `replace` and `remove`.
+- A writer of the whole tree (`carry: false, tree: true`) writes every record, branches and compacted history included, applying each record's patch. For a format that can hold a tree, a file read, stripped of `native` and written back this way equals the original record by record, as JSON with the order of keys ignored; read again, it gives the same transcript. Formatting (key order, spacing, the spelling of numbers) is what only `native` keeps.
+- A record the format cannot hold is written as the format's extension record carrying it, and read back as itself, so the writer drops nothing.
+- A reader never refuses a record: one with no ATXF form, or a line that is not even JSON, becomes a `custom` record that holds it, so a stream of a live file keeps going whatever is appended to it.
+- Fields with a meaning beyond one agent belong in ATXF fields, not in the patch, which holds only what is specific to the agent.
+
 ## 12. Usage
 
 - The buckets are disjoint:
@@ -185,6 +197,7 @@ A converter between a format and ATXF satisfies four laws:
   - `cacheRead` and `cacheWrite` count cached tokens separately.
   - `output` includes `reasoning`.
   - `total = input + cacheRead + cacheWrite + output`.
+  - `cacheWrite1h` is the part of `cacheWrite` written to a cache kept for one hour rather than the provider's default lifetime, which costs more.
 - Producers MUST convert source conventions (e.g. "prompt tokens including cache") into these buckets.
 - Transcript totals are the sum of:
   - `usage` on assistant messages,
@@ -192,6 +205,11 @@ A converter between a format and ATXF satisfies four laws:
   - non-cumulative `usage` records.
 
   `cumulative: true` usage records are running totals. Consumers MUST NOT add them to the sum; they MAY use the last one as the total.
+
+### 12.1 Timing and effort
+
+- A record's `time` is when it was written. A message that took a while to produce MAY also say when it began (`startTime`) and how long it took (`durationMs`): for an assistant message, from sending the request to the end of the response; for a tool result, the tool's run.
+- An assistant message MAY name the reasoning effort it was produced with: `reasoningEffort` as the agent's setting named it (§6), and `providerReasoningEffort` as it was sent to the provider, whose scale may differ. `responseModel` is the model the provider says answered, when it differs from the one asked for (`model.id`).
 
 ## 13. Related transcripts
 

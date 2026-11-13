@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
-// Checks one real Pi session: through every format and back, byte for byte, and its conversation without carry.
+// Checks one real Pi session: through every format and back, byte for byte; its conversation without carry; and
+// every entry back without native, written as a whole tree.
 // Run by test/chain.test.ts in a process of its own per session, so memory never outlives one session.
-import { addIntegrity, conversationView, embeddedToolResults, summariesAsUser, type PortableMessage } from "../src/index.ts";
+import { jsonEqual, addFidelity, emptyFidelity, formatFidelity, isLossless, addIntegrity, conversationView, embeddedToolResults, summariesAsUser, type PortableMessage } from "../src/index.ts";
 import { claudeCode } from "../src/formats/claude-code.ts";
 import { codex } from "../src/formats/codex.ts";
 import { geminiCli } from "../src/formats/gemini-cli.ts";
@@ -42,10 +43,19 @@ if (text.endsWith("\n") && !carries && !lines.slice(0, -1).some((line) => line.t
   Bun.gc(true);
 }
 
+// Without native, written as a whole tree, every entry comes back, and reads back as the same transcript.
+const fidelity = addFidelity(emptyFidelity(), pi, text);
+if (!isLossless(fidelity)) fail(`lost entries without native:\n${formatFidelity("pi", fidelity)}`);
+Bun.gc(true);
+
 for (const { converter } of converters) {
   const view = views[converter.agent];
   // Each step's intermediate is dropped before the next, so at most a few copies of the session are alive.
-  if (pi.fromAtxf(converter.toAtxf(converter.fromAtxf(transcript))) !== text) fail(`did not survive ${converter.agent}`);
+  // A file carrying a transcript is neither a native file (law 1) nor fromAtxf's output once Pi has appended to
+  // it: its transcript survives (law 3), its bytes need not.
+  if (carries) {
+    if (!jsonEqual(converter.toAtxf(converter.fromAtxf(transcript)), transcript)) fail(`did not survive ${converter.agent}`);
+  } else if (pi.fromAtxf(converter.toAtxf(converter.fromAtxf(transcript))) !== text) fail(`did not survive ${converter.agent}`);
   const clean = conversationView(converter.toAtxf(converter.fromAtxf(transcript, { carry: false })));
   const want = view ? JSON.stringify(view(conversationView(transcript))) : expected;
   if (JSON.stringify(view ? view(clean) : clean) !== want) fail(`lost its conversation through ${converter.agent} without carry`);

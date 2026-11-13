@@ -106,6 +106,7 @@
         "output": { "$ref": "#/$defs/nonNegativeInteger" },
         "cacheRead": { "$ref": "#/$defs/nonNegativeInteger" },
         "cacheWrite": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cacheWrite1h": { "description": "Of `cacheWrite`, the tokens written to a cache kept for one hour rather than the provider's default lifetime.", "$ref": "#/$defs/nonNegativeInteger" },
         "reasoning": { "$ref": "#/$defs/nonNegativeInteger" },
         "total": { "$ref": "#/$defs/nonNegativeInteger" },
         "cost": { "$ref": "#/$defs/cost" }
@@ -251,7 +252,8 @@
             "role": { "const": "system" },
             "content": { "$ref": "#/$defs/userContent" },
             "origin": { "$ref": "#/$defs/origin" },
-            "display": { "type": "boolean" }
+            "display": { "type": "boolean" },
+            "startTime": { "$ref": "#/$defs/startTime" }
           },
           "required": ["role", "content"]
         },
@@ -260,7 +262,8 @@
             "role": { "const": "user" },
             "content": { "$ref": "#/$defs/userContent" },
             "origin": { "$ref": "#/$defs/origin" },
-            "display": { "type": "boolean" }
+            "display": { "type": "boolean" },
+            "startTime": { "$ref": "#/$defs/startTime" }
           },
           "required": ["role", "content"]
         },
@@ -275,8 +278,13 @@
             "stop": { "$ref": "#/$defs/stopReason" },
             "rawStop": { "type": "string" },
             "responseId": { "type": "string" },
+            "responseModel": { "description": "The model the provider says produced the response, when it names it differently from `model.id`.", "type": "string" },
+            "reasoningEffort": { "description": "The reasoning effort the agent asked for, in its own terms (§12.1).", "type": "string" },
+            "providerReasoningEffort": { "description": "The reasoning effort sent to the provider, in the provider's terms (§12.1).", "type": "string" },
             "error": { "$ref": "#/$defs/error" },
-            "replay": { "$ref": "#/$defs/replay" }
+            "replay": { "$ref": "#/$defs/replay" },
+            "startTime": { "$ref": "#/$defs/startTime" },
+            "durationMs": { "$ref": "#/$defs/durationMs" }
           },
           "required": ["role", "content"]
         },
@@ -288,12 +296,51 @@
             "content": { "$ref": "#/$defs/userContent" },
             "isError": { "type": "boolean", "default": false },
             "details": { "description": "Structured result data not sent to the model.", "type": "object" },
+            "nestedCalls": { "$ref": "#/$defs/nestedCalls" },
             "origin": { "$ref": "#/$defs/origin" },
-            "display": { "type": "boolean" }
+            "display": { "type": "boolean" },
+            "startTime": { "$ref": "#/$defs/startTime" },
+            "durationMs": { "$ref": "#/$defs/durationMs" }
           },
           "required": ["role", "toolCallId", "content"]
         }
       ]
+    },
+
+    "startTime": {
+      "description": "When the message began, when that is not when it was written (the record's `time`): for an assistant message, when the request was sent (§12.1).",
+      "$ref": "#/$defs/timestamp"
+    },
+    "durationMs": {
+      "description": "How long producing the message took, in milliseconds: the model's response, or the tool's run (§12.1).",
+      "type": "number",
+      "minimum": 0
+    },
+    "nestedCalls": {
+      "description": "Calls the tool made to other tools while it ran, as from a script (§8). A record of what happened, never model context. Results are not recorded.",
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "arguments": { "type": "object" },
+              "argumentsBytes": { "description": "UTF-8 size of the arguments as JSON, when `arguments` was left out for its size.", "$ref": "#/$defs/nonNegativeInteger" },
+              "status": { "description": "`unfinished`: still running when the calling tool finished.", "enum": ["ok", "error", "unfinished"] },
+              "durationMs": { "$ref": "#/$defs/durationMs" },
+              "error": { "type": "string" }
+            },
+            "required": ["id", "name", "status"],
+            "additionalProperties": false
+          }
+        },
+        "complete": { "description": "False when calls were dropped, arguments left out, or calls had not finished.", "type": "boolean" }
+      },
+      "required": ["calls", "complete"],
+      "additionalProperties": false
     },
 
     "toolDefinition": {
@@ -538,6 +585,15 @@
             "snapshot": { "$ref": "#/$defs/contextSnapshot" },
             "reason": { "enum": ["auto", "manual"] },
             "tokensBefore": { "$ref": "#/$defs/nonNegativeInteger" },
+            "files": {
+              "description": "The files the compacted history read and modified, as the producer tracked them, in its order.",
+              "type": "object",
+              "properties": {
+                "read": { "type": "array", "items": { "type": "string" } },
+                "modified": { "type": "array", "items": { "type": "string" } }
+              },
+              "additionalProperties": false
+            },
             "model": { "$ref": "#/$defs/modelRef" },
             "usage": { "$ref": "#/$defs/usage" },
             "replay": { "$ref": "#/$defs/replay" }

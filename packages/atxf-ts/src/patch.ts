@@ -35,6 +35,9 @@ export function jsonEqual(a: unknown, b: unknown): boolean {
 const escape = (token: string) => token.replaceAll("~", "~0").replaceAll("/", "~1");
 const unescape = (token: string) => token.replaceAll("~1", "/").replaceAll("~0", "~");
 
+/** An array index in a JSON Pointer: digits only. */
+const isIndex = (token: string) => /^\d+$/.test(token);
+
 /** The patch that turns `from` into `to`. Empty when they are equal as JSON. */
 export function diff(to: unknown, from: unknown): PatchOperation[] {
   const ops: PatchOperation[] = [];
@@ -42,8 +45,8 @@ export function diff(to: unknown, from: unknown): PatchOperation[] {
   return ops;
 }
 
+// One pass: equal subtrees add no operations, so nothing is compared twice.
 function walk(to: unknown, from: unknown, path: string, ops: PatchOperation[]) {
-  if (jsonEqual(to, from)) return;
   if (isPlainObject(to) && isPlainObject(from)) {
     const keys = [...new Set([...Object.keys(to), ...Object.keys(from)])].sort();
     for (const key of keys) {
@@ -58,7 +61,7 @@ function walk(to: unknown, from: unknown, path: string, ops: PatchOperation[]) {
     to.forEach((item, index) => walk(item, from[index], `${path}/${index}`, ops));
     return;
   }
-  ops.push({ op: "replace", path, value: to });
+  if (!jsonEqual(to, from)) ops.push({ op: "replace", path, value: to });
 }
 
 /** `value` with `ops` applied, in order. Throws when a path does not exist. Does not change `value`. */
@@ -69,6 +72,10 @@ export function applyPatch<T>(value: T, ops: readonly PatchOperation[]): T {
 }
 
 function applyOne(root: Json, operation: PatchOperation): Json {
+  // Only what `diff` writes applies; any other operation (move, copy, test) is refused, not guessed at.
+  if (operation.op !== "add" && operation.op !== "replace" && operation.op !== "remove") throw new RangeError(`unsupported op ${String((operation as { op: unknown }).op)}`);
+  if (typeof operation.path !== "string" || (operation.path !== "" && !operation.path.startsWith("/"))) throw new RangeError("a path is a JSON Pointer");
+  if (operation.op !== "remove" && !Object.hasOwn(operation, "value")) throw new RangeError(`${operation.op} needs a value`);
   if (operation.path === "") {
     if (operation.op === "remove") throw new RangeError("a patch cannot remove the whole value");
     return structuredClone(operation.value) as Json;
@@ -77,12 +84,12 @@ function applyOne(root: Json, operation: PatchOperation): Json {
   const last = tokens.pop()!;
   let parent: Json = root;
   for (const token of tokens) {
-    const next: Json | undefined = Array.isArray(parent) ? parent[Number(token)] : isPlainObject(parent) && Object.hasOwn(parent, token) ? parent[token] : undefined;
+    const next: Json | undefined = Array.isArray(parent) ? (isIndex(token) ? parent[Number(token)] : undefined) : isPlainObject(parent) && Object.hasOwn(parent, token) ? parent[token] : undefined;
     if (next === undefined) throw new RangeError(`no value at ${operation.path}`);
     parent = next;
   }
   if (Array.isArray(parent)) {
-    const index = last === "-" ? parent.length : Number(last);
+    const index = last === "-" ? parent.length : isIndex(last) ? Number(last) : -1;
     if (!Number.isInteger(index) || index < 0 || index > parent.length) throw new RangeError(`no index ${last} at ${operation.path}`);
     if (operation.op === "add") parent.splice(index, 0, structuredClone(operation.value) as Json);
     else if (index === parent.length) throw new RangeError(`no value at ${operation.path}`);

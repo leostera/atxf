@@ -9,19 +9,27 @@ ATXF's tree and context semantics follow Pi, so this mapping is the closest to o
 | Pi | ATXF |
 | --- | --- |
 | `session` header | `transcript`. A `parentSession` becomes a `parent` with `relation: fork` |
-| `message`, role `user` / `assistant` / `toolResult` | `message`, role `user` / `assistant` / `tool` |
+| `message`, role `user` / `assistant` / `toolResult` | `message`, role `user` / `assistant` / `tool`. A message `timestamp` that differs from the entry's becomes `startTime` |
+| assistant `durationMs`, `responseModel`, `thinkingLevel`, `providerThinkingLevel` | `durationMs`, `responseModel`, `reasoningEffort`, `providerReasoningEffort` |
+| tool result `durationMs`, `nestedCalls` | `durationMs`, `nestedCalls` |
+| `usage.cacheWrite1h` | `usage.cacheWrite1h` |
 | `thinking` block + `thinkingSignature` | `reasoning` block + `replay` (`kind: signature`) |
 | `toolCall` block + `thoughtSignature` | `tool_call` block + `replay` (`kind: thought_signature`) |
 | system message `sections` / `toolsAdded` / `toolsRemoved` | `context`: the first one uses `mode: replace`, later ones `mode: patch` |
 | `model_change`, `thinking_level_change` | `settings` (`model`, `reasoningEffort`) |
-| `compaction` (`firstKeptEntryId`, `systemMessage`) | `compaction` with `strategy: summary` (`firstKeptId`, `snapshot`) |
+| `compaction` (`firstKeptEntryId`, `systemMessage`, `details.readFiles` / `modifiedFiles`) | `compaction` with `strategy: summary` (`firstKeptId`, `snapshot`, `files.read` / `modified`) |
 | `context_edit`, `branch_summary`, `label` | the same-named records (`label` becomes an annotation; its `parentId` is dropped) |
 | `custom_message` | `message`, role `user`, `origin.kind: extension`, carrying `display` |
-| `custom` | `custom`, with `namespace: pi` or the extension's own namespace |
+| `custom` | `custom` with `namespace: pi`, its `customType` as `name` |
+| `custom` with `customType: atxf.record` | the ATXF record in its `data`: how the whole-tree writer writes a record Pi has no entry for |
+| an entry with no ATXF form (unknown type, missing fields, a bash execution excluded from context) | `custom` with `namespace: pi.entry`, the entry whole in `data` |
+| a line that is not JSON | `custom` with `namespace: pi.line`, the line in `data.text` |
 | `usage` | `usage` |
 | `session_info` | `metadata.title` |
 
 Fidelity: `topology: tree`, `instructions: full`, `tools: full`.
+
+Without native (SPEC §11.2), each record keeps the rest of its entry in `ext.pi.patch`: chiefly assistant `diagnostics`, `constrainedSampling` on tool definitions, a system message's own `timestamp`, a compaction's `fromHook`, a `custom_message`'s `details`, and the parent Pi gives entries that are annotations in ATXF. Written as a whole tree, every entry comes back equal as JSON; on the 2,164 local sessions this was checked against (414,882 entries), none differs.
 
 ## Codex (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]`)
 

@@ -22,6 +22,8 @@ import {
   type Replay,
   type StopReason,
   type ToolDefinition,
+  type InstructionSection,
+  type CustomRecord,
   type Transcript,
   type TranscriptHeader,
   type Unit,
@@ -29,6 +31,10 @@ import {
   type UserBlock,
   type UserContent,
   ATXF_VERSION,
+  applyPatch,
+  diff,
+  type NestedCalls,
+  type PatchOperation,
 } from "../index.ts";
 
 /**
@@ -37,6 +43,12 @@ import {
  */
 export const AGENT = "pi";
 export const FORMAT = "pi/session-jsonl";
+/** Custom-record namespace for a Pi entry with no ATXF form: `data` is the whole entry. */
+const ENTRY = "pi.entry";
+/** Custom-record namespace for a line that is not JSON: `data.text` is the line. */
+const LINE = "pi.line";
+/** The Pi custom type of an entry carrying an ATXF record Pi has no entry for: `data` is the record. */
+const CARRIED = "atxf.record";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Pi → ATXF
@@ -62,10 +74,11 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
     start(first) {
       const value = first?.value;
       if (isObject(value) && value.type === "session" && !context.known.has(0)) {
-        header = sessionHeader(value, native(first!));
+        header = withNative(patched(sessionHeader(value), value, sessionEntry), native(first!));
         return { header, took: true };
       }
-      header = sessionHeader({}, undefined);
+      // A file without a session line: the header says so, and the whole-tree writer writes none.
+      header = { ...sessionHeader({}), ext: { [AGENT]: { session: false } } };
       return { header, took: false };
     },
     next(unit, index) {
@@ -76,14 +89,28 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
         }
         return undefined;
       }
-      const record = entryRecord(entry, index, tree, context, header!.time, hasContext);
+      const record = entryRecord(unit, index, tree, context, header!.time, hasContext);
       if (record.type === "context") hasContext = true;
-      return tree.push(record, native(unit));
+      const last = tree.last;
+      return tree.push(isLine(record) ? record : patched(record, entry, (r) => piEntry(r, last)), native(unit));
     },
   };
 }
 
-function sessionHeader(session: J, native: ReturnType<typeof nativeOf> | undefined): TranscriptHeader {
+/**
+ * `record` with what `value`, the native entry it was read from, holds beyond it: the patch from the entry `write`
+ * gives for the record back to `value` (SPEC §11.2), in `ext.pi.patch`.
+ */
+function patched<R extends EntryRecord | TranscriptHeader>(record: R, value: unknown, write: (record: R) => unknown): R {
+  const patch = diff(value, write(record));
+  return patch.length === 0 ? record : { ...record, ext: { ...record.ext, pi: { patch } } };
+}
+
+function withNative<R extends EntryRecord | TranscriptHeader>(record: R, native: ReturnType<typeof nativeOf> | undefined): R {
+  return native === undefined ? record : { ...record, native };
+}
+
+function sessionHeader(session: J, native?: ReturnType<typeof nativeOf>): TranscriptHeader {
   const id = typeof session.id === "string" && session.id !== "" ? session.id : "pi-session";
   return compact({
     type: "transcript" as const,
@@ -106,15 +133,20 @@ function sessionHeader(session: J, native: ReturnType<typeof nativeOf> | undefin
   });
 }
 
-function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: DecodeContext, fallbackTime: string, hasContext: boolean): EntryRecord {
+function entryRecord(unit: Unit, index: number, tree: TreeBuilder, context: DecodeContext, fallbackTime: string, hasContext: boolean): EntryRecord {
+  const entry = unit.value;
   const e: J = isObject(entry) ? entry : {};
   const id = context.ids.take(typeof e.id === "string" && e.id !== "" ? e.id : `pi-line-${index + 1}`);
   const parentId = tree.parentOf(e.parentId);
   const time = isoTime(e.timestamp, fallbackTime);
   const node = { id, parentId, time };
+  // An entry with no ATXF form is kept whole, as a custom record: never refused, never dropped (SPEC §11.2).
   const custom = (): EntryRecord => {
     tree.alias(e.id, id);
-    return { type: "custom", ...node, namespace: AGENT, name: typeof e.type === "string" ? e.type : "unparsed" };
+    if (entry === null && unit.raw.trim() !== "null") {
+      return { type: "custom", ...node, namespace: LINE, name: "line", data: { text: unit.raw.replace(/\n$/, "") } };
+    }
+    return { type: "custom", ...node, namespace: ENTRY, name: typeof e.type === "string" && e.type !== "" ? e.type : "entry", data: entry };
   };
   const annotation = <R extends EntryRecord>(record: R): R => {
     tree.alias(e.id, parentId);
@@ -125,9 +157,10 @@ function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: 
     return record;
   };
 
+  if (!isObject(entry)) return custom();
   switch (e.type) {
     case "message": {
-      const body = messageBody(e.message, tree);
+      const body = messageBody(e.message, tree, time);
       if (body === "context") return treeRecord(contextRecord(node, e.message, hasContext));
       if (body === undefined) return custom();
       return treeRecord({ type: "message", ...node, ...body } as EntryRecord);
@@ -165,6 +198,7 @@ function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: 
           firstKeptId,
           snapshot: snapshot ? compact({ instructions: snapshot.instructions, tools: snapshot.tools }) : undefined,
           tokensBefore: Number.isInteger(e.tokensBefore) && e.tokensBefore >= 0 ? e.tokensBefore : undefined,
+          files: filesOf(e.details),
           usage: usageOf(e.usage),
         }),
       );
@@ -181,8 +215,10 @@ function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: 
       if (fromId === null || typeof e.summary !== "string") return custom();
       return treeRecord(compact({ type: "branch_summary" as const, ...node, fromId, summary: e.summary, usage: usageOf(e.usage) }));
     }
-    case "custom":
+    case "custom": {
       tree.alias(e.id, id);
+      const carried = carriedRecord(e, node);
+      if (carried) return carried;
       return compact({
         type: "custom" as const,
         ...node,
@@ -190,6 +226,7 @@ function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: 
         name: typeof e.customType === "string" && e.customType !== "" ? e.customType : "custom",
         data: e.data,
       });
+    }
     case "custom_message": {
       const content = userContent(e.content);
       if (content === undefined) return custom();
@@ -217,15 +254,29 @@ function entryRecord(entry: unknown, index: number, tree: TreeBuilder, context: 
   }
 }
 
+const isLine = (record: EntryRecord): record is CustomRecord => record.type === "custom" && record.namespace === LINE;
+
+/** The ATXF record a Pi custom entry written by `encodeTree` carries, with the entry's id, parent and time. */
+function carriedRecord(e: J, node: { id: string; parentId: string | null; time: string }): EntryRecord | undefined {
+  if (e.customType !== CARRIED || !isObject(e.data) || typeof e.data.type !== "string") return undefined;
+  const { type, parentId, id: _, time: __, ...rest } = e.data;
+  const tree = parentId !== undefined;
+  return (tree ? { type, id: node.id, parentId: node.parentId, time: node.time, ...rest } : { type, id: node.id, time: node.time, ...rest }) as EntryRecord;
+}
+
 /** A Pi message as an ATXF message body; "context" for a system message; undefined when it has no portable form. */
-function messageBody(message: unknown, tree: TreeBuilder): MessageBody | "context" | undefined {
+function messageBody(message: unknown, tree: TreeBuilder, time: string): MessageBody | "context" | undefined {
   if (!isObject(message)) return undefined;
+  // Pi's message timestamp is when the message began (the request, for an assistant message); the entry's is when
+  // it was written. ATXF keeps the first only when it differs.
+  const began = isoTime(message.timestamp, time);
+  const startTime = began === time ? undefined : began;
   switch (message.role) {
     case "system":
       return "context";
     case "user": {
       const content = userContent(message.content);
-      return content === undefined ? undefined : { role: "user", content };
+      return content === undefined ? undefined : compact({ role: "user" as const, content, startTime });
     }
     case "assistant": {
       if (!Array.isArray(message.content)) return undefined;
@@ -277,7 +328,12 @@ function messageBody(message: unknown, tree: TreeBuilder): MessageBody | "contex
               ? message.stopReason
               : undefined,
         responseId: typeof message.responseId === "string" ? message.responseId : undefined,
+        responseModel: typeof message.responseModel === "string" ? message.responseModel : undefined,
+        reasoningEffort: typeof message.thinkingLevel === "string" ? message.thinkingLevel : undefined,
+        providerReasoningEffort: typeof message.providerThinkingLevel === "string" ? message.providerThinkingLevel : undefined,
         error: typeof message.errorMessage === "string" ? { message: message.errorMessage } : undefined,
+        startTime,
+        durationMs: duration(message.durationMs),
       });
     }
     case "toolResult": {
@@ -291,6 +347,9 @@ function messageBody(message: unknown, tree: TreeBuilder): MessageBody | "contex
         content,
         isError: typeof message.isError === "boolean" ? message.isError : undefined,
         details: isObject(message.details) ? message.details : undefined,
+        nestedCalls: nestedCallsOf(message.nestedCalls),
+        startTime,
+        durationMs: duration(message.durationMs),
       });
     }
     case "custom": {
@@ -387,6 +446,39 @@ function stopOf(value: unknown): StopReason | undefined {
   return STOPS[value] ?? "other";
 }
 
+const duration = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
+const strings = (value: unknown) => (Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : undefined);
+
+/** Pi's compaction details: the files the compacted history read and modified. */
+function filesOf(details: unknown): { read?: string[]; modified?: string[] } | undefined {
+  if (!isObject(details)) return undefined;
+  const files = compact({ read: strings(details.readFiles), modified: strings(details.modifiedFiles) });
+  return Object.keys(files).length === 0 ? undefined : files;
+}
+
+const NESTED_STATUS = new Set(["ok", "error", "unfinished"]);
+
+/** Pi's record of the calls a tool made, when it has the shape ATXF gives it (SPEC §8). */
+function nestedCallsOf(value: unknown): NestedCalls | undefined {
+  if (!isObject(value) || !Array.isArray(value.calls) || typeof value.complete !== "boolean") return undefined;
+  const calls: NestedCalls["calls"] = [];
+  for (const call of value.calls) {
+    if (!isObject(call) || typeof call.id !== "string" || typeof call.name !== "string" || !NESTED_STATUS.has(call.status)) return undefined;
+    calls.push(
+      compact({
+        id: call.id,
+        name: call.name,
+        arguments: isObject(call.arguments) ? call.arguments : undefined,
+        argumentsBytes: count(call.argumentsBytes),
+        status: call.status,
+        durationMs: duration(call.durationMs),
+        error: typeof call.error === "string" ? call.error : undefined,
+      }),
+    );
+  }
+  return { calls, complete: value.complete };
+}
+
 const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined);
 const amount = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
 
@@ -401,6 +493,7 @@ function usageOf(value: unknown): Usage | undefined {
     output,
     cacheRead: count(value.cacheRead),
     cacheWrite: count(value.cacheWrite),
+    cacheWrite1h: count(value.cacheWrite1h),
     reasoning: count(value.reasoning),
     total: count(value.totalTokens),
     cost: cost
@@ -413,6 +506,128 @@ function usageOf(value: unknown): Usage | undefined {
         })
       : undefined,
   });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// ATXF → Pi, the whole tree: every record as its Pi entry, with what the record kept of its entry (SPEC §11.2).
+
+/** The session line for a transcript header. */
+function sessionEntry(header: TranscriptHeader): J {
+  const version = header.source.version;
+  return compact({
+    type: "session",
+    version: version === undefined ? 3 : /^\d+$/.test(version) ? Number(version) : version,
+    id: header.source.sessionId ?? header.id,
+    timestamp: header.time,
+    cwd: header.workspace?.cwd ?? "",
+    parentSession: header.parent?.relation === "fork" ? (header.parent.uri ?? header.parent.transcriptId) : undefined,
+  });
+}
+
+/** What ATXF fields a record holds besides its envelope. */
+function fieldsOf(record: EntryRecord): string[] {
+  return Object.keys(record).filter((key) => !["type", "id", "parentId", "time", "ext", "native", "hash"].includes(key));
+}
+
+const only = (record: EntryRecord, ...keys: string[]) => fieldsOf(record).every((key) => keys.includes(key));
+
+/**
+ * The Pi entry for a record, before its patch. `last` is the last tree record before it, the parent Pi gives an
+ * entry that is not part of the tree in ATXF (a label, the session name).
+ */
+function piEntry(record: EntryRecord, last: string | null): unknown {
+  const parentId = "parentId" in record ? record.parentId : last;
+  const entry = (type: string, fields: J): J => ({ type, id: record.id, parentId, timestamp: record.time, ...fields });
+  const carried = () => {
+    const { id: _, time: __, ext: ___, native: ____, hash: _____, ...data } = record as J;
+    return entry("custom", { customType: CARRIED, data });
+  };
+  switch (record.type) {
+    case "message": {
+      if (record.role === "user" && record.origin?.kind === "extension") {
+        return entry("custom_message", { customType: record.origin.name ?? "", content: piUserContent(record.content), display: record.display ?? true });
+      }
+      return entry("message", { message: piMessage(record, millisFromIso(record.startTime ?? record.time)) });
+    }
+    case "context":
+      return entry("message", { message: piSystem(record.instructions, record.toolsAdded, record.toolsRemoved, millisFromIso(record.time)) });
+    case "settings":
+      if (record.model && only(record, "model") && only({ ...record.model, type: "x" } as unknown as EntryRecord, "provider", "id")) {
+        return entry("model_change", { provider: record.model.provider, modelId: record.model.id });
+      }
+      if (record.reasoningEffort !== undefined && only(record, "reasoningEffort")) return entry("thinking_level_change", { thinkingLevel: record.reasoningEffort });
+      return carried();
+    case "usage":
+      return entry("usage", compact({ kind: record.kind, provider: record.model?.provider, model: record.model?.id, usage: piUsage(record.usage) }));
+    case "compaction":
+      if (record.strategy !== "summary" || record.summary === undefined) return carried();
+      return entry(
+        "compaction",
+        compact({
+          summary: record.summary,
+          firstKeptEntryId: record.firstKeptId ?? record.id,
+          tokensBefore: record.tokensBefore,
+          details: record.files ? compact({ readFiles: record.files.read, modifiedFiles: record.files.modified }) : undefined,
+          usage: record.usage ? piUsage(record.usage) : undefined,
+          systemMessage: record.snapshot ? piSystem(record.snapshot.instructions, record.snapshot.tools, undefined, millisFromIso(record.time)) : undefined,
+        }),
+      );
+    case "context_edit":
+      return entry("context_edit", { targetId: record.targetId, replacement: record.replacement === null ? null : piUserContent(record.replacement as UserContent) });
+    case "branch_summary":
+      return entry("branch_summary", compact({ fromId: record.fromId, summary: record.summary, usage: record.usage ? piUsage(record.usage) : undefined }));
+    case "custom":
+      if (record.namespace === ENTRY) return record.data;
+      if (record.namespace === AGENT) return entry("custom", compact({ customType: record.name, data: record.data }));
+      return carried();
+    case "label":
+      return entry("label", { targetId: record.targetId, label: record.label });
+    case "metadata":
+      return record.title !== undefined && only(record, "title") ? entry("session_info", { name: record.title }) : carried();
+    default:
+      return carried();
+  }
+}
+
+/** A Pi system message: instructions as sections, the one named `system` as its content. */
+function piSystem(instructions: InstructionSection[] | undefined, tools: ToolDefinition[] | undefined, removed: string[] | undefined, timestamp: number): J {
+  const sections = (instructions ?? []).filter((section) => section.name !== "system");
+  const system = (instructions ?? []).find((section) => section.name === "system");
+  return compact({
+    role: "system",
+    content: system?.text ?? "",
+    sections: sections.length > 0 ? Object.fromEntries(sections.map((section) => [section.name, section.text])) : undefined,
+    toolsAdded: tools?.map((tool) => compact({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+    toolsRemoved: removed?.map((name) => ({ name })),
+    timestamp,
+  });
+}
+
+/** `value` with the patch `kept` holds in `ext.pi`; unpatched when the patch no longer applies. */
+function restored(kept: EntryRecord | TranscriptHeader, value: unknown): unknown {
+  const patch = (kept.ext?.[AGENT] as { patch?: PatchOperation[] } | undefined)?.patch;
+  if (!Array.isArray(patch)) return value;
+  try {
+    return applyPatch(value, patch);
+  } catch {
+    return value;
+  }
+}
+
+function encodeTree(transcript: Transcript): Encoded[] {
+  const kept = transcript.header.ext?.[AGENT] as { session?: boolean } | undefined;
+  const out: Encoded[] = kept?.session === false ? [] : [{ value: restored(transcript.header, sessionEntry(transcript.header)), source: null }];
+  let last: string | null = null;
+  for (const record of transcript.records) {
+    if (isLine(record)) {
+      const text = isObject(record.data) && typeof record.data.text === "string" ? record.data.text : "";
+      out.push({ value: null, raw: text, source: record.id });
+    } else {
+      out.push({ value: restored(record, piEntry(record, last)), source: record.id });
+    }
+    if ("parentId" in record) last = record.id;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -520,8 +735,10 @@ function piMessage(body: MessageBody, timestamp: number): J {
         toolName: body.toolName ?? "",
         content: typeof body.content === "string" ? [{ type: "text", text: body.content }] : piUserContent(body.content),
         details: body.details,
+        nestedCalls: body.nestedCalls,
         isError: body.isError === true,
         timestamp,
+        durationMs: body.durationMs,
       });
     case "assistant": {
       const signature = (replay: Replay[] | undefined, kind: string) => replay?.find((r) => r.kind === kind && typeof r.data === "string")?.data;
@@ -549,7 +766,6 @@ function piMessage(body: MessageBody, timestamp: number): J {
             return { type: "text", text: "[image]" };
         }
       });
-      const usage = body.usage;
       return compact({
         role: "assistant",
         content,
@@ -557,27 +773,38 @@ function piMessage(body: MessageBody, timestamp: number): J {
         provider: body.model?.provider ?? "unknown",
         model: body.model?.id ?? "unknown",
         responseId: body.responseId,
-        usage: {
-          input: usage?.input ?? 0,
-          output: usage?.output ?? 0,
-          cacheRead: usage?.cacheRead ?? 0,
-          cacheWrite: usage?.cacheWrite ?? 0,
-          totalTokens: usage?.total ?? (usage ? usage.input + usage.output : 0),
-          cost: {
-            input: usage?.cost?.input ?? 0,
-            output: usage?.cost?.output ?? 0,
-            cacheRead: usage?.cost?.cacheRead ?? 0,
-            cacheWrite: usage?.cost?.cacheWrite ?? 0,
-            total: usage?.cost?.total ?? 0,
-          },
-        },
+        responseModel: body.responseModel,
+        thinkingLevel: body.reasoningEffort,
+        providerThinkingLevel: body.providerReasoningEffort,
+        usage: piUsage(body.usage),
         stopReason: PI_STOPS[body.stop ?? "end"],
         rawStopReason: body.rawStop,
         errorMessage: body.error?.message,
         timestamp,
+        durationMs: body.durationMs,
       });
     }
   }
+}
+
+/** Usage as Pi writes it: every bucket and cost present, zero when unknown. */
+function piUsage(usage: Usage | undefined): J {
+  return compact({
+    input: usage?.input ?? 0,
+    output: usage?.output ?? 0,
+    cacheRead: usage?.cacheRead ?? 0,
+    cacheWrite: usage?.cacheWrite ?? 0,
+    cacheWrite1h: usage?.cacheWrite1h,
+    reasoning: usage?.reasoning,
+    totalTokens: usage?.total ?? (usage ? usage.input + usage.output : 0),
+    cost: {
+      input: usage?.cost?.input ?? 0,
+      output: usage?.cost?.output ?? 0,
+      cacheRead: usage?.cost?.cacheRead ?? 0,
+      cacheWrite: usage?.cost?.cacheWrite ?? 0,
+      total: usage?.cost?.total ?? 0,
+    },
+  });
 }
 
 function piUserContent(content: UserContent): string | J[] {
@@ -615,5 +842,5 @@ const carrier = {
   },
 };
 
-export const pi = defineConverter({ agent: AGENT, format: FORMAT, framing: jsonl, decode, encode, carrier, reader: (context) => reader(context, false) });
+export const pi = defineConverter({ agent: AGENT, format: FORMAT, framing: jsonl, decode, encode, encodeTree, carrier, reader: (context) => reader(context, false) });
 export default pi;

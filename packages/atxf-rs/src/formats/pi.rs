@@ -4,10 +4,11 @@
 use std::collections::HashMap;
 
 use super::{Node, obj_or_empty, opt_str, or_else, replay_data, text_blocks};
-use crate::codec::{DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, carried_value, mark_id};
+use crate::codec::{DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, TreeUnit, carried_value, mark_id};
 use crate::context::{BuildContextOptions, build_context};
 use crate::json::{self, Get, Map, Obj, Value, amount, count, entries, number, s, to_js_string};
 use crate::native::{Framing, Jsonl, Unit, native_of};
+use crate::patch::{apply, diff};
 use crate::time::{EPOCH, iso_time, millis_from_iso};
 use crate::transcript::{Record, Transcript};
 
@@ -15,6 +16,14 @@ pub struct Pi;
 
 const AGENT: &str = "pi";
 const FORMAT: &str = "pi/session-jsonl";
+/// Custom-record namespace for a Pi entry with no ATXF form: `data` is the whole entry.
+const ENTRY: &str = "pi.entry";
+/// Custom-record namespace for a line that is not JSON: `data.text` is the line.
+const LINE: &str = "pi.line";
+/// The Pi custom type of an entry carrying an ATXF record Pi has no entry for: `data` is the record.
+const CARRIED: &str = "atxf.record";
+/// Envelope fields of a record, besides the fields its type gives it.
+const ENVELOPE: [&str; 7] = ["type", "id", "parentId", "time", "ext", "native", "hash"];
 
 fn native(unit: &Unit) -> Map {
     native_of(&[unit], AGENT, FORMAT, &Jsonl)
@@ -34,9 +43,13 @@ impl FormatSpec for Pi {
         let header = match units.first().map(|u| &u.value) {
             Some(Value::Object(first)) if first.is("type", "session") && !tree.is_known(0) => {
                 start = 1;
-                session_header(first, Some(native(&units[0])))
+                let header = patched(session_header(first), &units[0].value, session_entry);
+                Obj::new().spread(&header).set("native", Value::Object(native(&units[0]))).build()
             }
-            _ => session_header(&Map::new(), None),
+            // A file without a session line: the header says so, and the whole-tree writer writes none.
+            _ => {
+                Obj::new().spread(&session_header(&Map::new())).set("ext", Obj::new().set(AGENT, Obj::new().set("session", false))).build()
+            }
         };
         let mut has_context = tree.context.base.is_some_and(|b| b.records.iter().any(|r| r.kind() == "context"));
         let fallback_time = header.str("time").unwrap_or(EPOCH).to_string();
@@ -50,10 +63,12 @@ impl FormatSpec for Pi {
                 }
                 continue;
             }
-            let record = entry_record(entry, index, &mut tree, &fallback_time, has_context);
+            let record = entry_record(unit, index, &mut tree, &fallback_time, has_context);
             if record.kind() == "context" {
                 has_context = true;
             }
+            let last = tree.last.clone();
+            let record = if is_line(&record) { record } else { patched(record, entry, |r| pi_entry(r, last.as_deref())) };
             tree.push(record, Some(native(unit)));
         }
         Decoded { header, records: tree.records }
@@ -61,6 +76,10 @@ impl FormatSpec for Pi {
 
     fn encode(&self, transcript: &Transcript, _session_id: Option<&str>) -> Vec<Encoded> {
         encode(transcript)
+    }
+
+    fn encode_tree(&self, transcript: &Transcript) -> Option<Vec<TreeUnit>> {
+        Some(encode_tree(transcript))
     }
 
     fn mark(&self, value: Value, source: Option<&str>) -> Value {
@@ -92,7 +111,29 @@ pub(super) fn detach_from_atxf_key(units: &mut [Unit]) -> Option<Value> {
     units[index].value.get_mut("atxf")?.as_object_mut()?.shift_remove("transcript")
 }
 
-fn session_header(session: &Map, native: Option<Map>) -> Map {
+/// `record` with what `value`, the native entry it was read from, holds beyond it: the patch from the entry `write`
+/// gives for the record back to `value` (SPEC §11.2), in `ext.pi.patch`.
+fn patched(mut record: Map, value: &Value, write: impl FnOnce(&Map) -> Value) -> Map {
+    let patch = diff(value, &write(&record));
+    if patch.is_empty() {
+        return record;
+    }
+    // In place, as `{...record, ext: {...record.ext, pi: {patch}}}` orders keys: an existing key keeps its place.
+    let ext = record.entry("ext").or_insert_with(|| Value::Object(Map::new()));
+    if !ext.is_object() {
+        *ext = Value::Object(Map::new());
+    }
+    if let Value::Object(ext) = ext {
+        ext.insert(AGENT.to_string(), Obj::new().set("patch", Value::Array(patch)).value());
+    }
+    record
+}
+
+fn is_line(record: &Map) -> bool {
+    record.is("type", "custom") && record.is("namespace", LINE)
+}
+
+fn session_header(session: &Map) -> Map {
     let id = session.nonempty("id").unwrap_or("pi-session");
     Obj::new()
         .set("type", "transcript")
@@ -113,7 +154,6 @@ fn session_header(session: &Map, native: Option<Map>) -> Map {
             "fidelity",
             Obj::new().set("topology", "tree").set("instructions", "full").set("tools", "full").set("native", "all").set("ids", "stable"),
         )
-        .opt("native", native)
         .build()
 }
 
@@ -122,7 +162,8 @@ enum Body {
     Context,
 }
 
-fn entry_record(entry: &Value, index: usize, tree: &mut TreeBuilder<'_>, fallback_time: &str, has_context: bool) -> Map {
+fn entry_record(unit: &Unit, index: usize, tree: &mut TreeBuilder<'_>, fallback_time: &str, has_context: bool) -> Map {
+    let entry = &unit.value;
     let e = obj_or_empty(Some(entry));
     let preferred = e.nonempty("id").map_or_else(|| format!("pi-line-{}", index + 1), str::to_string);
     let id = tree.take_id(&preferred);
@@ -130,17 +171,25 @@ fn entry_record(entry: &Value, index: usize, tree: &mut TreeBuilder<'_>, fallbac
     let time = iso_time(e.field("timestamp"), fallback_time);
     let node = Node { id: id.clone(), parent_id: parent_id.clone(), time: time.clone() };
     let native_id = e.field("id").cloned();
+    // An entry with no ATXF form is kept whole, as a custom record: never refused, never dropped (SPEC §11.2).
     let custom = |tree: &mut TreeBuilder<'_>| {
         tree.alias(native_id.as_ref(), Some(id.clone()));
-        node.record("custom").set("namespace", AGENT).set("name", e.str("type").unwrap_or("unparsed")).build()
+        if entry.is_null() && json::trim(&unit.raw) != "null" {
+            let text = unit.raw.strip_suffix('\n').unwrap_or(&unit.raw);
+            return node.record("custom").set("namespace", LINE).set("name", "line").set("data", Obj::new().set("text", text)).build();
+        }
+        node.record("custom").set("namespace", ENTRY).set("name", e.nonempty("type").unwrap_or("entry")).set("data", entry.clone()).build()
     };
     let as_tree = |tree: &mut TreeBuilder<'_>, record: Map| {
         tree.alias(native_id.as_ref(), Some(id.clone()));
         record
     };
 
+    if !entry.is_object() {
+        return custom(tree);
+    }
     match e.str("type") {
-        Some("message") => match message_body(e.field("message"), tree) {
+        Some("message") => match message_body(e.field("message"), tree, &time) {
             Some(Body::Context) => {
                 let message = obj_or_empty(e.field("message"));
                 as_tree(tree, context_record(&node, &message, has_context))
@@ -193,6 +242,7 @@ fn entry_record(entry: &Value, index: usize, tree: &mut TreeBuilder<'_>, fallbac
                     .set("firstKeptId", opt_str(first_kept.as_deref()))
                     .opt("snapshot", snapshot)
                     .opt("tokensBefore", tokens_before)
+                    .opt("files", files_of(e.field("details")))
                     .opt("usage", usage_of(e.field("usage")))
                     .build(),
             )
@@ -220,6 +270,9 @@ fn entry_record(entry: &Value, index: usize, tree: &mut TreeBuilder<'_>, fallbac
         },
         Some("custom") => {
             tree.alias(native_id.as_ref(), Some(id.clone()));
+            if let Some(carried) = carried_record(&e, &node) {
+                return carried;
+            }
             node.record("custom")
                 .set("namespace", AGENT)
                 .set("name", e.nonempty("customType").unwrap_or("custom"))
@@ -262,6 +315,19 @@ fn entry_record(entry: &Value, index: usize, tree: &mut TreeBuilder<'_>, fallbac
     }
 }
 
+/// The ATXF record a Pi custom entry written by `encode_tree` carries, with the entry's id, parent and time.
+fn carried_record(e: &Map, node: &Node) -> Option<Map> {
+    let data = e.obj("data").filter(|_| e.is("customType", CARRIED))?;
+    let kind = data.str("type")?;
+    let rest: Map = json::entries(data)
+        .filter(|(k, _)| !["type", "parentId", "id", "time"].contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let record = Obj::new().set("type", kind).set("id", node.id.as_str());
+    let record = if data.contains_key("parentId") { record.set("parentId", opt_str(node.parent_id.as_deref())) } else { record };
+    Some(record.set("time", node.time.as_str()).spread(&rest).build())
+}
+
 fn replay(base: &Obj, kind: &str, data: Option<&Value>) -> Option<Value> {
     match data {
         Some(Value::String(d)) if !d.is_empty() => Some(Value::Array(vec![base.clone().set("kind", kind).set("data", d.as_str()).value()])),
@@ -270,11 +336,17 @@ fn replay(base: &Obj, kind: &str, data: Option<&Value>) -> Option<Value> {
 }
 
 /// A Pi message as an ATXF message body; `Context` for a system message; `None` when it has no portable form.
-fn message_body(message: Option<&Value>, tree: &TreeBuilder<'_>) -> Option<Body> {
+fn message_body(message: Option<&Value>, tree: &TreeBuilder<'_>, time: &str) -> Option<Body> {
     let message = message?.as_object()?;
+    // Pi's message timestamp is when the message began (the request, for an assistant message); the entry's is when
+    // it was written. ATXF keeps the first only when it differs.
+    let began = iso_time(message.field("timestamp"), time);
+    let start_time = (began != time).then_some(began);
     match message.str("role")? {
         "system" => Some(Body::Context),
-        "user" => Some(Body::Message(Obj::new().set("role", "user").set("content", user_content(message.field("content"))?).build())),
+        "user" => Some(Body::Message(
+            Obj::new().set("role", "user").set("content", user_content(message.field("content"))?).opt("startTime", start_time).build(),
+        )),
         "assistant" => {
             let blocks = message.arr("content")?;
             let model = match (message.str("provider"), message.str("model")) {
@@ -343,7 +415,12 @@ fn message_body(message: Option<&Value>, tree: &TreeBuilder<'_>) -> Option<Body>
                     .opt("stop", stop)
                     .opt("rawStop", raw_stop)
                     .opt("responseId", message.str("responseId"))
+                    .opt("responseModel", message.str("responseModel"))
+                    .opt("reasoningEffort", message.str("thinkingLevel"))
+                    .opt("providerReasoningEffort", message.str("providerThinkingLevel"))
                     .opt("error", message.str("errorMessage").map(|m| Obj::new().set("message", m)))
+                    .opt("startTime", start_time)
+                    .opt("durationMs", duration(message.field("durationMs")))
                     .build(),
             ))
         }
@@ -358,6 +435,9 @@ fn message_body(message: Option<&Value>, tree: &TreeBuilder<'_>) -> Option<Body>
                     .set("content", content)
                     .opt("isError", message.bool("isError"))
                     .opt("details", message.obj("details").cloned())
+                    .opt("nestedCalls", nested_calls_of(message.field("nestedCalls")))
+                    .opt("startTime", start_time)
+                    .opt("durationMs", duration(message.field("durationMs")))
                     .build(),
             ))
         }
@@ -478,6 +558,46 @@ fn stop_of(value: Option<&Value>) -> Option<&'static str> {
     })
 }
 
+fn duration(value: Option<&Value>) -> Option<Value> {
+    json::as_f64(value?).filter(|n| n.is_finite() && *n >= 0.0).map(number)
+}
+
+fn strings(value: Option<&Value>) -> Option<Value> {
+    let items = value?.as_array()?;
+    items.iter().all(Value::is_string).then(|| Value::Array(items.clone()))
+}
+
+/// Pi's compaction details: the files the compacted history read and modified.
+fn files_of(details: Option<&Value>) -> Option<Value> {
+    let details = details?.as_object()?;
+    let files =
+        Obj::new().opt("read", strings(details.field("readFiles"))).opt("modified", strings(details.field("modifiedFiles"))).build();
+    (!files.is_empty()).then_some(Value::Object(files))
+}
+
+/// Pi's record of the calls a tool made, when it has the shape ATXF gives it (SPEC §8).
+fn nested_calls_of(value: Option<&Value>) -> Option<Value> {
+    let value = value?.as_object()?;
+    let (calls, complete) = (value.arr("calls")?, value.bool("complete")?);
+    let mut out = Vec::with_capacity(calls.len());
+    for call in calls {
+        let call = call.as_object()?;
+        let status = call.str("status").filter(|s| ["ok", "error", "unfinished"].contains(s))?;
+        out.push(
+            Obj::new()
+                .set("id", call.str("id")?)
+                .set("name", call.str("name")?)
+                .opt("arguments", call.obj("arguments").cloned())
+                .opt("argumentsBytes", count(call.field("argumentsBytes")).map(number))
+                .set("status", status)
+                .opt("durationMs", duration(call.field("durationMs")))
+                .opt("error", call.str("error"))
+                .value(),
+        );
+    }
+    Some(Obj::new().set("calls", Value::Array(out)).set("complete", complete).value())
+}
+
 fn usage_of(value: Option<&Value>) -> Option<Value> {
     let value = value?.as_object()?;
     let input = count(value.field("input"))?;
@@ -489,6 +609,7 @@ fn usage_of(value: Option<&Value>) -> Option<Value> {
             .set("output", number(output))
             .opt("cacheRead", count(value.field("cacheRead")).map(number))
             .opt("cacheWrite", count(value.field("cacheWrite")).map(number))
+            .opt("cacheWrite1h", count(value.field("cacheWrite1h")).map(number))
             .opt("reasoning", count(value.field("reasoning")).map(number))
             .opt("total", count(value.field("totalTokens")).map(number))
             .opt(
@@ -504,6 +625,211 @@ fn usage_of(value: Option<&Value>) -> Option<Value> {
             )
             .value(),
     )
+}
+
+// ATXF → Pi, the whole tree: every record as its Pi entry, with what the record kept of its entry (SPEC §11.2).
+
+/// The session line for a transcript header.
+fn session_entry(header: &Map) -> Value {
+    let source = header.obj("source");
+    let version = match source.and_then(|s| s.field("version")) {
+        None => number(3.0),
+        Some(v) => {
+            let text = to_js_string(v);
+            if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+                number(text.parse::<f64>().unwrap_or(f64::NAN))
+            } else {
+                v.clone()
+            }
+        }
+    };
+    let parent = header.obj("parent").filter(|p| p.is("relation", "fork"));
+    Obj::new()
+        .set("type", "session")
+        .set("version", version)
+        .opt("id", source.and_then(|s| s.field("sessionId")).filter(|v| !v.is_null()).or(header.field("id")).cloned())
+        .opt("timestamp", header.field("time").cloned())
+        .set("cwd", or_else(header.obj("workspace").and_then(|w| w.field("cwd")), || s("")))
+        .opt("parentSession", parent.and_then(|p| p.field("uri").filter(|v| !v.is_null()).or(p.field("transcriptId"))).cloned())
+        .value()
+}
+
+/// Whether every field of `record` besides its envelope is one of `keys`.
+fn only(record: &Map, keys: &[&str]) -> bool {
+    record.keys().all(|key| ENVELOPE.contains(&key.as_str()) || keys.contains(&key.as_str()))
+}
+
+/// The Pi entry for a record, before its patch. `last` is the last tree record before it, the parent Pi gives an
+/// entry that is not part of the tree in ATXF (a label, the session name).
+fn pi_entry(record: &Map, last: Option<&str>) -> Value {
+    let parent_id = match record.field("parentId") {
+        Some(parent) => parent.clone(),
+        None if record.contains_key("parentId") => Value::Null,
+        None => opt_str(last),
+    };
+    let entry = |kind: &str, fields: Obj| {
+        Obj::new()
+            .set("type", kind)
+            .opt("id", record.field("id").cloned())
+            .set("parentId", parent_id.clone())
+            .opt("timestamp", record.field("time").cloned())
+            .spread(&fields.build())
+            .value()
+    };
+    let carried = || {
+        let data: Map = json::entries(record)
+            .filter(|(k, _)| !["id", "time", "ext", "native", "hash"].contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        entry("custom", Obj::new().set("customType", CARRIED).set("data", Value::Object(data)))
+    };
+    let time = || millis_from_iso(record.time());
+    let usage = |key: &str| record.obj(key).map(|u| pi_usage(Some(u)));
+    match record.kind() {
+        "message" => {
+            let origin = record.obj("origin");
+            if record.is("role", "user") && origin.is_some_and(|o| o.is("kind", "extension")) {
+                let fields = Obj::new()
+                    .set("customType", or_else(origin.and_then(|o| o.field("name")), || s("")))
+                    .set("content", pi_user_content(record.field("content")))
+                    .set("display", or_else(record.field("display"), || Value::Bool(true)));
+                return entry("custom_message", fields);
+            }
+            let began = record.str("startTime").unwrap_or(record.time());
+            entry("message", Obj::new().set("message", pi_message(record, millis_from_iso(began))))
+        }
+        "context" => {
+            let message = pi_system(record.arr("instructions"), record.arr("toolsAdded"), record.arr("toolsRemoved"), time());
+            entry("message", Obj::new().set("message", message))
+        }
+        "settings" => {
+            if let Some(model) = record.obj("model").filter(|m| only(record, &["model"]) && only(m, &["provider", "id"])) {
+                let fields = Obj::new().opt("provider", model.field("provider").cloned()).opt("modelId", model.field("id").cloned());
+                return entry("model_change", fields);
+            }
+            match record.field("reasoningEffort") {
+                Some(effort) if only(record, &["reasoningEffort"]) => {
+                    entry("thinking_level_change", Obj::new().set("thinkingLevel", effort.clone()))
+                }
+                _ => carried(),
+            }
+        }
+        "usage" => {
+            let model = record.obj("model");
+            let fields = Obj::new()
+                .opt("kind", record.field("kind").cloned())
+                .opt("provider", model.and_then(|m| m.field("provider")).cloned())
+                .opt("model", model.and_then(|m| m.field("id")).cloned())
+                .set("usage", pi_usage(record.obj("usage")));
+            entry("usage", fields)
+        }
+        "compaction" => {
+            let Some(summary) = record.field("summary").filter(|_| record.is("strategy", "summary")) else { return carried() };
+            let details = record.obj("files").map(|files| {
+                Obj::new().opt("readFiles", files.field("read").cloned()).opt("modifiedFiles", files.field("modified").cloned())
+            });
+            let system =
+                record.obj("snapshot").map(|snapshot| pi_system(snapshot.arr("instructions"), snapshot.arr("tools"), None, time()));
+            let fields = Obj::new()
+                .set("summary", summary.clone())
+                .set("firstKeptEntryId", or_else(record.field("firstKeptId"), || record.field("id").cloned().unwrap_or(Value::Null)))
+                .opt("tokensBefore", record.field("tokensBefore").cloned())
+                .opt("details", details)
+                .opt("usage", usage("usage"))
+                .opt("systemMessage", system);
+            entry("compaction", fields)
+        }
+        "context_edit" => {
+            let replacement = match record.field("replacement") {
+                Some(Value::Null) => Value::Null,
+                other => pi_user_content(other),
+            };
+            entry("context_edit", Obj::new().opt("targetId", record.field("targetId").cloned()).set("replacement", replacement))
+        }
+        "branch_summary" => entry(
+            "branch_summary",
+            Obj::new()
+                .opt("fromId", record.field("fromId").cloned())
+                .opt("summary", record.field("summary").cloned())
+                .opt("usage", usage("usage")),
+        ),
+        "custom" if record.is("namespace", ENTRY) => record.field("data").cloned().unwrap_or(Value::Null),
+        "custom" if record.is("namespace", AGENT) => {
+            entry("custom", Obj::new().opt("customType", record.field("name").cloned()).opt("data", record.field("data").cloned()))
+        }
+        "label" => {
+            entry("label", Obj::new().opt("targetId", record.field("targetId").cloned()).opt("label", record.field("label").cloned()))
+        }
+        "metadata" => match record.field("title") {
+            Some(title) if only(record, &["title"]) => entry("session_info", Obj::new().set("name", title.clone())),
+            _ => carried(),
+        },
+        _ => carried(),
+    }
+}
+
+/// A Pi system message: instructions as sections, the one named `system` as its content.
+fn pi_system(instructions: Option<&Vec<Value>>, tools: Option<&Vec<Value>>, removed: Option<&Vec<Value>>, timestamp: f64) -> Value {
+    let instructions = instructions.map(Vec::as_slice).unwrap_or_default();
+    let is_system = |section: &Value| section.is("name", "system");
+    let mut sections = Map::new();
+    for section in instructions.iter().filter(|section| !is_system(section)) {
+        if let Some(text) = section.field("text") {
+            sections.insert(section.field("name").map(to_js_string).unwrap_or_else(|| "undefined".to_string()), text.clone());
+        }
+    }
+    let content = or_else(instructions.iter().find(|section| is_system(section)).and_then(|section| section.field("text")), || s(""));
+    let tools = tools.map(|tools| {
+        Value::Array(
+            tools
+                .iter()
+                .map(|tool| {
+                    Obj::new()
+                        .opt("name", tool.field("name").cloned())
+                        .opt("description", tool.field("description").cloned())
+                        .opt("parameters", tool.field("parameters").cloned())
+                        .value()
+                })
+                .collect(),
+        )
+    });
+    let removed = removed.map(|names| Value::Array(names.iter().map(|name| Obj::new().set("name", name.clone()).value()).collect()));
+    Obj::new()
+        .set("role", "system")
+        .set("content", content)
+        .opt("sections", (!instructions.iter().all(is_system)).then_some(Value::Object(sections)))
+        .opt("toolsAdded", tools)
+        .opt("toolsRemoved", removed)
+        .set("timestamp", number(timestamp))
+        .value()
+}
+
+/// `value` with the patch `kept` holds in `ext.pi`; unpatched when the patch no longer applies.
+fn restored(kept: &Map, value: Value) -> Value {
+    match kept.obj("ext").and_then(|ext| ext.obj(AGENT)).and_then(|pi| pi.arr("patch")) {
+        Some(patch) => apply(&value, patch).unwrap_or(value),
+        None => value,
+    }
+}
+
+fn encode_tree(transcript: &Transcript) -> Vec<TreeUnit> {
+    let header = &transcript.header;
+    let mut out = Vec::with_capacity(transcript.records.len() + 1);
+    if header.obj("ext").and_then(|ext| ext.obj(AGENT)).and_then(|pi| pi.bool("session")) != Some(false) {
+        out.push(TreeUnit::Value(restored(header, session_entry(header))));
+    }
+    let mut last: Option<&str> = None;
+    for record in &transcript.records {
+        if is_line(record) {
+            out.push(TreeUnit::Raw(record.obj("data").and_then(|d| d.str("text")).unwrap_or("").to_string()));
+        } else {
+            out.push(TreeUnit::Value(restored(record, pi_entry(record, last))));
+        }
+        if record.contains_key("parentId") {
+            last = Some(record.id());
+        }
+    }
+    out
 }
 
 // ATXF → Pi: the active context as a linear Pi session.
@@ -696,8 +1022,10 @@ fn pi_message(body: &Map, timestamp: f64) -> Value {
                 .set("toolName", or_else(body.field("toolName"), || s("")))
                 .set("content", content)
                 .opt("details", body.field("details").cloned())
+                .opt("nestedCalls", body.field("nestedCalls").cloned())
                 .set("isError", body.field("isError") == Some(&Value::Bool(true)))
                 .set("timestamp", timestamp)
+                .opt("durationMs", body.field("durationMs").cloned())
                 .value()
         }
         "assistant" => {
@@ -745,19 +1073,6 @@ fn pi_message(body: &Map, timestamp: f64) -> Value {
                     _ => Value::Null,
                 })
                 .collect();
-            let usage = body.obj("usage");
-            let cost = usage.and_then(|u| u.obj("cost"));
-            let n = |m: Option<&Map>, key: &str| or_else(m.and_then(|m| m.field(key)), || number(0.0));
-            let total = match usage {
-                Some(u) => match u.defined("total") {
-                    Some(total) => total.clone(),
-                    None => number(
-                        json::as_f64(u.field("input").unwrap_or(&Value::Null)).unwrap_or(f64::NAN)
-                            + json::as_f64(u.field("output").unwrap_or(&Value::Null)).unwrap_or(f64::NAN),
-                    ),
-                },
-                None => number(0.0),
-            };
             let model = body.obj("model");
             Obj::new()
                 .set("role", "assistant")
@@ -766,32 +1081,53 @@ fn pi_message(body: &Map, timestamp: f64) -> Value {
                 .set("provider", or_else(model.and_then(|m| m.field("provider")), || s("unknown")))
                 .set("model", or_else(model.and_then(|m| m.field("id")), || s("unknown")))
                 .opt("responseId", body.field("responseId").cloned())
-                .set(
-                    "usage",
-                    Obj::new()
-                        .set("input", n(usage, "input"))
-                        .set("output", n(usage, "output"))
-                        .set("cacheRead", n(usage, "cacheRead"))
-                        .set("cacheWrite", n(usage, "cacheWrite"))
-                        .set("totalTokens", total)
-                        .set(
-                            "cost",
-                            Obj::new()
-                                .set("input", n(cost, "input"))
-                                .set("output", n(cost, "output"))
-                                .set("cacheRead", n(cost, "cacheRead"))
-                                .set("cacheWrite", n(cost, "cacheWrite"))
-                                .set("total", n(cost, "total")),
-                        ),
-                )
+                .opt("responseModel", body.field("responseModel").cloned())
+                .opt("thinkingLevel", body.field("reasoningEffort").cloned())
+                .opt("providerThinkingLevel", body.field("providerReasoningEffort").cloned())
+                .set("usage", pi_usage(body.obj("usage")))
                 .opt("stopReason", pi_stop(body.field("stop").filter(|v| !v.is_null())))
                 .opt("rawStopReason", body.field("rawStop").cloned())
                 .opt("errorMessage", body.obj("error").and_then(|e| e.field("message")).cloned())
                 .set("timestamp", timestamp)
+                .opt("durationMs", body.field("durationMs").cloned())
                 .value()
         }
         _ => Value::Null,
     }
+}
+
+/// Usage as Pi writes it: every bucket and cost present, zero when unknown.
+fn pi_usage(usage: Option<&Map>) -> Value {
+    let cost = usage.and_then(|u| u.obj("cost"));
+    let n = |m: Option<&Map>, key: &str| or_else(m.and_then(|m| m.field(key)), || number(0.0));
+    let total = match usage {
+        Some(u) => match u.defined("total") {
+            Some(total) => total.clone(),
+            None => number(
+                json::as_f64(u.field("input").unwrap_or(&Value::Null)).unwrap_or(f64::NAN)
+                    + json::as_f64(u.field("output").unwrap_or(&Value::Null)).unwrap_or(f64::NAN),
+            ),
+        },
+        None => number(0.0),
+    };
+    Obj::new()
+        .set("input", n(usage, "input"))
+        .set("output", n(usage, "output"))
+        .set("cacheRead", n(usage, "cacheRead"))
+        .set("cacheWrite", n(usage, "cacheWrite"))
+        .opt("cacheWrite1h", usage.and_then(|u| u.field("cacheWrite1h")).cloned())
+        .opt("reasoning", usage.and_then(|u| u.field("reasoning")).cloned())
+        .set("totalTokens", total)
+        .set(
+            "cost",
+            Obj::new()
+                .set("input", n(cost, "input"))
+                .set("output", n(cost, "output"))
+                .set("cacheRead", n(cost, "cacheRead"))
+                .set("cacheWrite", n(cost, "cacheWrite"))
+                .set("total", n(cost, "total")),
+        )
+        .value()
 }
 
 /// `String(v)` as `Array.prototype.join` writes it: `null` as empty.
