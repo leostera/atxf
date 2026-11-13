@@ -113,7 +113,7 @@ Packages have their own versions. The format version they implement is separate:
 - Conformance fixtures for the reference `buildContext` (SPEC §5).
 - Signed seals.
 - ATXF to ATIF.
-- Streaming converters for every format; Pi streams in `@leostera/atxf` (`pi.stream`), the others and the `atxf` crate do not yet.
+- Streaming converters for every format; Pi streams, resumable from a saved state, in `@leostera/atxf` (`pi.stream`) and the `atxf` crate (`PiStream`); the others do not yet.
 
 ## License
 

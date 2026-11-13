@@ -90,6 +90,15 @@ export function chainStep(previous: Hash, recordHash: Hash): Hash {
  * Incremental hasher for a transcript being written or read in file order. `push` returns the record with its
  * hash; `seal` returns the commitment to every record pushed so far.
  */
+/** A `TranscriptHasher` as JSON, ids in UTF-16 order. */
+export interface HasherState {
+  hashes: [string, Hash][];
+  unreferenced: string[];
+  forward: string[];
+  chain: Hash;
+  count: number;
+}
+
 export class TranscriptHasher {
   readonly header: TranscriptHeader;
   readonly transcriptHash: Hash;
@@ -121,6 +130,33 @@ export class TranscriptHasher {
     this.chain = chainStep(this.chain, hash);
     this.count += 1;
     return { ...record, hash };
+  }
+
+  /**
+   * What the hasher knows, as JSON (see `TranscriptHasher.resume`): each record's hash, the records nothing
+   * references yet (the heads a seal would commit to), ids referenced before their record, the chain and the count.
+   */
+  state(): HasherState {
+    const dag = new Set(this.dagIds);
+    return {
+      hashes: [...this.hashes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      unreferenced: this.dagIds.filter((id) => !this.referenced.has(id)).sort(),
+      forward: [...this.referenced].filter((id) => !dag.has(id)).sort(),
+      chain: this.chain,
+      count: this.count,
+    };
+  }
+
+  /** A hasher for `header` (without its hash) that goes on from `state`, as the one that gave it would. */
+  static resume(header: TranscriptHeader, state: HasherState): TranscriptHasher {
+    const hasher = new TranscriptHasher(header);
+    for (const [id, hash] of state.hashes) hasher.hashes.set(id, hash);
+    // Only which records are heads matters to a seal, not their order: a referenced record is never one again.
+    hasher.dagIds.push(...state.unreferenced);
+    for (const id of state.forward) hasher.referenced.add(id);
+    hasher.chain = state.chain;
+    hasher.count = state.count;
+    return hasher;
   }
 
   /** The commitment a `seal` record appended now would carry. */

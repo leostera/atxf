@@ -22,6 +22,12 @@ All notable changes to `@leostera/atxf`. Versions are the package's own; every r
   the entry in `data` (it was `namespace: "pi"`, named after its type, with nothing else). A line that is not JSON
   becomes `namespace: "pi.line"` with `data.text`. `pi.stream().push` no longer throws: blank lines add nothing,
   text with several lines is read a line at a time, and a line carrying a transcript is read as its entry.
+- **Resumable streams:** `stream.state()` returns the stream's state as JSON, and `pi.stream({ resume: state })`
+  goes on from it: pushing the lines after it returns the records and hashes the saved stream would have. The
+  state holds the header and every record's id, parent, type and hash, so it grows with the number of records,
+  not their content: about 155 bytes per record (3 MB for a 121 MB session, 1.4 MB gzipped). It names the reader's
+  version (`PI_STREAM_STATE`), and another version refuses it. The `atxf` crate reads Pi as a stream too
+  (`PiStream`), writing and resuming the same states; `atxf stream` drives either from the command line.
 - **`atxf fidelity --from <agent> [--json] <file|dir>…`** and `addFidelity`, `formatFidelity`, `isLossless`: what
   a session keeps without native, entry by entry.
 - `diff`, `applyPatch` and `jsonEqual`: JSON Patch between JSON values, as converters compute it. `applyPatch`

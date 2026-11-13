@@ -103,6 +103,35 @@ export function describeConverterLaws(converter: Converter, options: LawOptions 
         );
       });
 
+      // Saved after any line and resumed in a new stream, as JSON, a stream goes on as if it had never stopped.
+      const resumedAt = (text: string, cut: number, integrity?: boolean) => {
+        const lines = text.split("\n").filter((line) => line !== "");
+        const first = stream({ integrity });
+        const before = lines.slice(0, cut).flatMap((line) => first.push(line));
+        const resumed = stream({ resume: JSON.parse(JSON.stringify(first.state())) });
+        const after = lines.slice(cut).flatMap((line) => resumed.push(line));
+        return { header: resumed.header ?? first.header, records: [...before, ...after] };
+      };
+      if (converter.stream!().state !== undefined && (() => { try { converter.stream!().state(); return true; } catch { return false; } })()) {
+        for (const fixture of fixtures) {
+          test(`streaming: fixture ${fixture.name} resumes from its state after every line`, () => {
+            const whole = streamed(fixture.text);
+            const count = fixture.text.split("\n").filter((line) => line !== "").length;
+            for (let cut = 0; cut <= count; cut++) expect(resumedAt(fixture.text, cut)).toEqual(whole);
+          });
+        }
+
+        test("streaming: a stream saved after any line and resumed returns the same records and hashes", () => {
+          fc.assert(
+            fc.property(appended, fc.nat(), fc.boolean(), (text, at, integrity) => {
+              const count = text.split("\n").filter((line) => line !== "").length;
+              expect(resumedAt(text, at % (count + 1), integrity)).toEqual(streamed(text, integrity));
+            }),
+            { numRuns: runs },
+          );
+        });
+      }
+
       test("streaming: a streamed transcript writes back the file it was read from", () => {
         fc.assert(fc.property(appended, (text) => converter.fromAtxf(streamed(text)) === text), { numRuns: runs });
       });

@@ -1,6 +1,6 @@
-import { IdAllocator, type Converter, type FromAtxfOptions, type TranscriptStream } from "./convert.ts";
+import { IdAllocator, type Converter, type FromAtxfOptions, type StreamOptions, type StreamState, type TranscriptStream } from "./convert.ts";
 import { canonicalJson, sha256 } from "./canonical.ts";
-import { addIntegrity, TranscriptHasher } from "./integrity.ts";
+import { addIntegrity, TranscriptHasher, type HasherState } from "./integrity.ts";
 import { indexTree } from "./tree.ts";
 import { isPureNative, nativeUnits, type Framing, type Unit } from "./native.ts";
 import type { EntryRecord, Transcript, TranscriptHeader } from "./types.ts";
@@ -43,6 +43,11 @@ export interface FormatSpec {
    * written. With it, the converter can `stream`. `decode` should read through the same reader, so the two agree.
    */
   reader?(context: DecodeContext): FormatReader;
+  /**
+   * The version of the reader's state (`FormatReader.state`), for a stream that is saved and resumed. It names the
+   * format and changes whenever reading does, so a state saved by another version is refused, not misread.
+   */
+  streamState?: string;
 }
 
 /** A format's decoder, one unit at a time. */
@@ -51,6 +56,10 @@ export interface FormatReader {
   start(first: Unit | undefined): { header: TranscriptHeader; took: boolean };
   /** The record for the unit at `index` in the file, or `undefined` for a unit in `context.known`. */
   next(unit: Unit, index: number): EntryRecord | undefined;
+  /** What the reader knows after the units it has read, as JSON; for formats with `streamState`. */
+  state?(): unknown;
+  /** Picks up from `state`, for a transcript whose header is `header`. Throws when `state` is not one. */
+  restore?(state: unknown, header: TranscriptHeader): void;
 }
 
 export interface Encoded {
@@ -144,15 +153,31 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
   const reader = spec.reader;
   const stream =
     reader &&
-    ((options: ConvertOptions = {}): TranscriptStream => {
-      const integrity = options.integrity ?? defaults.integrity ?? true;
+    ((options: StreamOptions = {}): TranscriptStream => {
+      const resume = options.resume === undefined ? undefined : parseStreamState(options.resume, spec.streamState);
+      const integrity = resume?.integrity ?? options.integrity ?? defaults.integrity ?? true;
       const read = reader({ known: new Map(), ids: new IdAllocator() });
-      let header: TranscriptHeader | undefined;
+      let header: TranscriptHeader | undefined = resume?.header ?? undefined;
       let hasher: TranscriptHasher | undefined;
-      let index = 0;
+      let index = resume?.lines ?? 0;
+      if (resume && header !== undefined) {
+        read.restore!(resume.reader, header);
+        if (integrity) hasher = TranscriptHasher.resume(header, resume.hasher!);
+      }
       return {
         get header() {
           return hasher?.header ?? header;
+        },
+        state() {
+          if (!spec.streamState || !read.state) throw new RangeError(`${spec.agent} streams cannot be saved`);
+          return {
+            stream: spec.streamState,
+            integrity,
+            lines: index,
+            header: header ?? null,
+            reader: header === undefined ? null : read.state(),
+            hasher: hasher?.state() ?? null,
+          };
         },
         push(line) {
           // Every line converts: a stream never refuses one, so a reader of a live file never stops. Blank lines
@@ -178,6 +203,39 @@ export function defineConverter(spec: FormatSpec, defaults: ConvertOptions = {})
     });
 
   return { agent: spec.agent, format: spec.format, toAtxf, fromAtxf, ...(stream ? { stream } : {}), ...(spec.encodeTree ? { tree: true } : {}) };
+}
+
+/** A saved stream, checked: refused when it is from another reader version or is not a stream state at all. */
+function parseStreamState(value: StreamState, version: string | undefined) {
+  const state = value as unknown as Record<string, unknown>;
+  if (version === undefined) throw new RangeError("this converter's streams cannot be resumed");
+  if (typeof state !== "object" || state === null || state.stream !== version) {
+    throw new RangeError(`a stream state from another reader (${String(state?.stream)}; this one reads ${version})`);
+  }
+  const header = state.header === null ? undefined : (state.header as TranscriptHeader);
+  const ok =
+    typeof state.integrity === "boolean" &&
+    Number.isInteger(state.lines) &&
+    (state.lines as number) >= 0 &&
+    (header === undefined ? state.lines === 0 && state.reader === null : typeof header === "object" && state.reader !== null) &&
+    (state.integrity && header !== undefined ? isHasherState(state.hasher) : state.hasher === null);
+  if (!ok) throw new RangeError("not a stream state");
+  return { integrity: state.integrity as boolean, lines: state.lines as number, header, reader: state.reader, hasher: state.hasher as HasherState | null };
+}
+
+function isHasherState(value: unknown): value is HasherState {
+  const h = value as HasherState;
+  const ids = (list: unknown) => Array.isArray(list) && list.every((id) => typeof id === "string");
+  return (
+    typeof h === "object" &&
+    h !== null &&
+    Array.isArray(h.hashes) &&
+    h.hashes.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && typeof pair[1] === "string") &&
+    ids(h.unreferenced) &&
+    ids(h.forward) &&
+    typeof h.chain === "string" &&
+    Number.isInteger(h.count)
+  );
 }
 
 /** The digest of a native file, recorded in `fidelity.nativeDigest` of the transcript read from it. */

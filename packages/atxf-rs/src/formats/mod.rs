@@ -10,7 +10,7 @@ pub use claude_code::{ClaudeCode, uuid_for};
 pub use codex::Codex;
 pub use gemini_cli::GeminiCli;
 pub use opencode::OpenCode;
-pub use pi::Pi;
+pub use pi::{PI_STREAM_STATE, Pi, PiStream};
 
 use crate::codec::Converter;
 use crate::json::{Get, Map, Obj, Value};

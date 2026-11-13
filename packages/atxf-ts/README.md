@@ -38,6 +38,15 @@ const reading = pi.stream!();
 for (const line of newLines) for (const record of reading.push(line)) store(record);
 ```
 
+A stream can be saved between lines and resumed elsewhere, e.g. after the process reading a live file is evicted.
+The state is JSON, about 155 bytes per record whatever the records hold (3 MB for a 121 MB session), and a state
+from another reader version is refused:
+
+```ts
+save(JSON.stringify(reading.state()));
+const again = pi.stream!({ resume: JSON.parse(load()) }); // push the lines after it: the same records and hashes
+```
+
 The JSON Schema is at `@leostera/atxf/schema.json`.
 
 `@leostera/atxf/testing` holds fast-check generators, and `@leostera/atxf/laws` the laws every converter must

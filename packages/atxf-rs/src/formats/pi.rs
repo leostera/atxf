@@ -1,16 +1,17 @@
 //! Pi session files (`~/.pi/agent/sessions/**.jsonl`), session version 3, as documented in Pi's
 //! `docs/session-format.md` and `docs/message-types.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{Node, obj_or_empty, opt_str, or_else, replay_data, text_blocks};
 use crate::codec::{Converter, DecodeContext, Decoded, Encoded, FormatSpec, IdAllocator, TreeBuilder, TreeUnit, carried_value, mark_id};
 use crate::context::{BuildContextOptions, build_context};
+use crate::integrity::TranscriptHasher;
 use crate::json::{self, Get, Map, Obj, Value, amount, count, entries, number, s, to_js_string};
 use crate::native::{Framing, Jsonl, Unit, native_of};
 use crate::patch::{apply, diff};
 use crate::time::{EPOCH, iso_time, millis_from_iso};
-use crate::transcript::{Record, Transcript};
+use crate::transcript::{Error, Record, Transcript};
 
 pub struct Pi;
 
@@ -38,51 +39,12 @@ impl FormatSpec for Pi {
     }
 
     fn decode(&self, units: &[Unit], context: DecodeContext<'_>) -> Decoded {
-        let mut tree = TreeBuilder::new(context);
-        let mut start = 0;
-        let header = match units.first().map(|u| &u.value) {
-            Some(Value::Object(first)) if first.is("type", "session") && !tree.is_known(0) => {
-                start = 1;
-                let (session, reverse) = match unpatched(&units[0].value) {
-                    Some((session, reverse)) => (session, Some(reverse)),
-                    None => (units[0].value.clone(), None),
-                };
-                let header = patched(session_header(&obj_or_empty(Some(&session))), &session, session_entry);
-                let header = reversed(header, reverse.as_ref());
-                Obj::new().spread(&header).set("native", Value::Object(native(&units[0]))).build()
-            }
-            // A file without a session line: the header says so, and the whole-tree writer writes none.
-            _ => {
-                Obj::new().spread(&session_header(&Map::new())).set("ext", Obj::new().set(AGENT, Obj::new().set("session", false))).build()
-            }
-        };
-        let mut has_context = tree.context.base.is_some_and(|b| b.records.iter().any(|r| r.kind() == "context"));
-        let fallback_time = header.str("time").unwrap_or(EPOCH).to_string();
-
-        for (index, unit) in units.iter().enumerate().skip(start) {
-            let entry = &unit.value;
-            if tree.is_known(index) {
-                if let Some(id @ Value::String(_)) = entry.field("id") {
-                    let target = tree.known(index).or_else(|| tree.parent_of(entry.field("parentId")));
-                    tree.alias(Some(id), target);
-                }
-                continue;
-            }
-            let stripped = unpatched(entry).map(|(value, reverse)| (Unit { value, raw: unit.raw.clone() }, reverse));
-            let (read_from, reverse) = match &stripped {
-                Some((unit, reverse)) => (unit, Some(reverse)),
-                None => (unit, None),
-            };
-            let read = entry_record(read_from, index, &mut tree, &fallback_time, has_context);
-            let last = tree.last.clone();
-            let record = if is_line(&read) { read } else { patched(read, &read_from.value, |r| pi_entry(r, last.as_deref())) };
-            let record = reversed(record, reverse);
-            if record.kind() == "context" {
-                has_context = true;
-            }
-            tree.push(record, Some(native(unit)));
+        let mut reader = PiReader::new(TreeBuilder::new(context));
+        let (header, took) = reader.start(units.first());
+        for (index, unit) in units.iter().enumerate().skip(usize::from(took)) {
+            reader.next(unit, index);
         }
-        Decoded { header, records: tree.records }
+        Decoded { header, records: reader.tree.records }
     }
 
     fn encode(&self, transcript: &Transcript, _session_id: Option<&str>) -> Vec<Encoded> {
@@ -112,6 +74,189 @@ impl FormatSpec for Pi {
 
     fn detach(&self, units: &mut Vec<Unit>) -> Option<Value> {
         detach_from_atxf_key(units)
+    }
+}
+
+/// Reads a Pi file one unit at a time, in file order. Each unit becomes its record from what came before it alone,
+/// so reading a file whole (`decode`) and reading it as Pi appends to it (`PiStream`) give the same records.
+struct PiReader<'a> {
+    tree: TreeBuilder<'a>,
+    fallback_time: String,
+    has_context: bool,
+}
+
+impl<'a> PiReader<'a> {
+    fn new(tree: TreeBuilder<'a>) -> Self {
+        let has_context = tree.context.base.is_some_and(|b| b.records.iter().any(|r| r.kind() == "context"));
+        Self { tree, fallback_time: EPOCH.to_string(), has_context }
+    }
+
+    /// The header, from the file's first unit when it is the session line (`true`: it took the unit).
+    fn start(&mut self, first: Option<&Unit>) -> (Map, bool) {
+        let (header, took) = match first {
+            Some(unit @ Unit { value: Value::Object(session), .. }) if session.is("type", "session") && !self.tree.is_known(0) => {
+                let (session, reverse) = match unpatched(&unit.value) {
+                    Some((session, reverse)) => (session, Some(reverse)),
+                    None => (unit.value.clone(), None),
+                };
+                let header = patched(session_header(&obj_or_empty(Some(&session))), &session, session_entry);
+                let header = reversed(header, reverse.as_ref());
+                (Obj::new().spread(&header).set("native", Value::Object(native(unit))).build(), true)
+            }
+            // A file without a session line: the header says so, and the whole-tree writer writes none.
+            _ => (
+                Obj::new().spread(&session_header(&Map::new())).set("ext", Obj::new().set(AGENT, Obj::new().set("session", false))).build(),
+                false,
+            ),
+        };
+        self.fallback_time = header.str("time").unwrap_or(EPOCH).to_string();
+        (header, took)
+    }
+
+    /// The record for the unit at `index`, or `None` for a unit the carried transcript already holds.
+    fn next(&mut self, unit: &Unit, index: usize) -> Option<Map> {
+        let tree = &mut self.tree;
+        let entry = &unit.value;
+        if tree.is_known(index) {
+            if let Some(id @ Value::String(_)) = entry.field("id") {
+                let target = tree.known(index).or_else(|| tree.parent_of(entry.field("parentId")));
+                tree.alias(Some(id), target);
+            }
+            return None;
+        }
+        let stripped = unpatched(entry).map(|(value, reverse)| (Unit { value, raw: unit.raw.clone() }, reverse));
+        let (read_from, reverse) = match &stripped {
+            Some((unit, reverse)) => (unit, Some(reverse)),
+            None => (unit, None),
+        };
+        let read = entry_record(read_from, index, tree, &self.fallback_time, self.has_context);
+        let last = tree.last.clone();
+        let record = if is_line(&read) { read } else { patched(read, &read_from.value, |r| pi_entry(r, last.as_deref())) };
+        let record = reversed(record, reverse);
+        if record.kind() == "context" {
+            self.has_context = true;
+        }
+        Some(tree.push_owned(record, Some(native(unit))))
+    }
+}
+
+/// The version of what a Pi stream's state holds and how reading goes on from it, the same as `PI_STREAM_STATE` in
+/// TypeScript. Bump it whenever Pi reading changes: a state from another version is refused.
+pub const PI_STREAM_STATE: &str = "pi/session-jsonl stream 1";
+
+/// A Pi session read as Pi writes it, one line at a time, as `pi.stream()` reads it in TypeScript: each record is
+/// final when returned, and the stream keeps the ids and hashes later lines refer to, never the records. Its state
+/// (`state`) is JSON, written byte for byte as TypeScript writes it, and resumes in either (`resume`).
+pub struct PiStream {
+    reader: PiReader<'static>,
+    header: Option<Map>,
+    hasher: Option<TranscriptHasher>,
+    integrity: bool,
+    lines: usize,
+}
+
+impl PiStream {
+    pub fn new(integrity: bool) -> Self {
+        let context = DecodeContext { known: HashMap::new(), base: None, ids: IdAllocator::default() };
+        Self { reader: PiReader::new(TreeBuilder::streaming(context)), header: None, hasher: None, integrity, lines: 0 }
+    }
+
+    /// A stream that goes on from a saved `state`. Refused when it is from another reader version, or not a state.
+    pub fn resume(state: &Value) -> Result<Self, Error> {
+        if state.str("stream") != Some(PI_STREAM_STATE) {
+            let found = state.field("stream").map_or_else(|| "undefined".to_string(), to_js_string);
+            return Err(Error::new(format!("a stream state from another reader ({found}; this one reads {PI_STREAM_STATE})")));
+        }
+        Self::parse(state).ok_or_else(|| Error::new("not a stream state"))
+    }
+
+    fn parse(state: &Value) -> Option<Self> {
+        let integrity = state.bool("integrity")?;
+        let lines = state.field("lines").and_then(json::as_f64).filter(|n| n.fract() == 0.0 && *n >= 0.0)? as usize;
+        let mut stream = Self::new(integrity);
+        stream.lines = lines;
+        match state.field("header")? {
+            Value::Null => {
+                (lines == 0 && state.field("reader")?.is_null() && state.field("hasher")?.is_null()).then_some(())?;
+            }
+            Value::Object(header) => {
+                let reader = state.field("reader")?;
+                stream.reader.has_context = reader.bool("hasContext")?;
+                let extra = reader.arr("ids")?.iter().map(|id| id.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
+                let tree = reader.obj("tree")?;
+                stream.reader.tree.restore(&Value::Object(tree.clone()))?;
+                for node in tree.field("nodes")?.as_array()? {
+                    stream.reader.tree.take_id(node.as_array()?.first()?.as_str()?);
+                }
+                for id in &extra {
+                    stream.reader.tree.take_id(id);
+                }
+                stream.reader.fallback_time = header.str("time").unwrap_or(EPOCH).to_string();
+                stream.hasher = match (integrity, state.field("hasher")?) {
+                    (true, hasher) => Some(TranscriptHasher::resume(header.clone(), hasher)?),
+                    (false, Value::Null) => None,
+                    (false, _) => return None,
+                };
+                stream.header = Some(header.clone());
+            }
+            _ => return None,
+        }
+        Some(stream)
+    }
+
+    /// The header, once the first line has been read.
+    pub fn header(&self) -> Option<&Map> {
+        self.hasher.as_ref().map(|h| &h.header).or(self.header.as_ref())
+    }
+
+    /// Reads the next line, without its newline, and returns the records it adds. Never refuses a line: blank
+    /// lines add nothing, and text holding several lines is read a line at a time.
+    pub fn push(&mut self, line: &str) -> Vec<Map> {
+        if line.contains('\n') {
+            return line.split('\n').flat_map(|part| self.push(part)).collect();
+        }
+        if json::trim(line).is_empty() {
+            return Vec::new();
+        }
+        let Some(unit) = Jsonl.parse(&format!("{line}\n")).into_iter().next() else { return Vec::new() };
+        if self.header.is_none() {
+            let (header, took) = self.reader.start(Some(&unit));
+            if self.integrity {
+                self.hasher = Some(TranscriptHasher::new(header.clone()));
+            }
+            self.header = Some(header);
+            if took {
+                self.lines += 1;
+                return Vec::new();
+            }
+        }
+        let record = self.reader.next(&unit, self.lines);
+        self.lines += 1;
+        let Some(record) = record else { return Vec::new() };
+        match &mut self.hasher {
+            // A streamed record references only records before it, so hashing it cannot fail.
+            Some(hasher) => vec![hasher.push_owned(record.clone()).unwrap_or(record)],
+            None => vec![record],
+        }
+    }
+
+    /// The state to resume from after the lines pushed so far, as JSON.
+    pub fn state(&self) -> Value {
+        let reader = self.header.as_ref().map(|_| {
+            let tree = self.reader.tree.state();
+            let nodes: HashSet<&str> = tree.arr("nodes").into_iter().flatten().filter_map(|n| n.as_array()?.first()?.as_str()).collect();
+            let ids: Vec<Value> =
+                self.reader.tree.context.ids.taken().into_iter().filter(|id| !nodes.contains(id.as_str())).map(Value::String).collect();
+            Obj::new().set("hasContext", self.reader.has_context).set("tree", tree.clone()).set("ids", Value::Array(ids)).value()
+        });
+        Obj::new()
+            .set("stream", PI_STREAM_STATE)
+            .set("integrity", self.integrity)
+            .set("lines", number(self.lines as f64))
+            .set("header", self.header.clone().map_or(Value::Null, Value::Object))
+            .set("reader", reader.unwrap_or(Value::Null))
+            .set("hasher", self.hasher.as_ref().map_or(Value::Null, TranscriptHasher::state))
+            .value()
     }
 }
 

@@ -11,6 +11,7 @@ import {
   millisFromIso,
   nativeOf,
   TreeBuilder,
+  type TreeState,
   type AssistantBlock,
   type DecodeContext,
   type Encoded,
@@ -61,6 +62,41 @@ function decode(units: Unit[], context: DecodeContext): { header: TranscriptHead
 }
 
 /**
+ * The version of what a Pi stream's state holds and how reading goes on from it. Bump it whenever Pi reading
+ * changes, even in a record's field: a state from another version is refused (`test/pi-stream.test.ts` pins the
+ * records this version reads from a fixture, to catch a change that forgets to).
+ */
+export const PI_STREAM_STATE = "pi/session-jsonl stream 1";
+
+/** What a Pi reader knows, as JSON: whether a context was read, the tree so far, and ids taken by no tree record. */
+interface PiStreamState {
+  hasContext: boolean;
+  tree: TreeState;
+  ids: string[];
+}
+
+function parsePiStreamState(value: unknown): PiStreamState {
+  const strings = (list: unknown): list is string[] => Array.isArray(list) && list.every((item) => typeof item === "string");
+  const orNull = (item: unknown) => item === null || typeof item === "string";
+  const s = value as PiStreamState;
+  const tree = s?.tree;
+  const ok =
+    isObject(s) &&
+    typeof s.hasContext === "boolean" &&
+    strings(s.ids) &&
+    isObject(tree) &&
+    Array.isArray(tree.resolved) &&
+    tree.resolved.every((entry) => typeof entry === "string" || (Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && orNull(entry[1]))) &&
+    Array.isArray(tree.nodes) &&
+    tree.nodes.every((node) => Array.isArray(node) && node.length === 3 && typeof node[0] === "string" && orNull(node[1]) && typeof node[2] === "string") &&
+    Array.isArray(tree.toolCalls) &&
+    tree.toolCalls.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && strings(pair[1])) &&
+    orNull(tree.last);
+  if (!ok) throw new RangeError("not a Pi stream state");
+  return s;
+}
+
+/**
  * Reads a Pi file one unit at a time, in file order. Each unit becomes its record from what came before it alone,
  * so reading a file whole (`decode`) and reading it as Pi appends to it (`stream`) give the same records.
  */
@@ -71,6 +107,18 @@ function reader(context: DecodeContext, retain = true): FormatReader & { tree: T
   let hasContext = context.base?.records.some((record) => record.type === "context") ?? false;
   return {
     tree,
+    state(): PiStreamState {
+      const treeState = tree.state();
+      const nodes = new Set(treeState.nodes.map(([id]) => id));
+      return { hasContext, tree: treeState, ids: context.ids.taken().filter((id) => !nodes.has(id)) };
+    },
+    restore(state, restored) {
+      const parsed = parsePiStreamState(state);
+      header = restored;
+      hasContext = parsed.hasContext;
+      tree.restore(parsed.tree);
+      for (const id of [...parsed.tree.nodes.map(([id]) => id), ...parsed.ids]) context.ids.take(id);
+    },
     start(first) {
       const value = first?.value;
       if (isObject(value) && value.type === "session" && !context.known.has(0)) {
@@ -899,5 +947,15 @@ const carrier = {
   },
 };
 
-export const pi = defineConverter({ agent: AGENT, format: FORMAT, framing: jsonl, decode, encode, encodeTree, carrier, reader: (context) => reader(context, false) });
+export const pi = defineConverter({
+  agent: AGENT,
+  format: FORMAT,
+  framing: jsonl,
+  decode,
+  encode,
+  encodeTree,
+  carrier,
+  reader: (context) => reader(context, false),
+  streamState: PI_STREAM_STATE,
+});
 export default pi;

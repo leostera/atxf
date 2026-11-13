@@ -23,7 +23,7 @@ export interface Converter {
    * Reads a native file one line at a time, as the agent appends to it. Present for line-framed formats whose
    * records never change once written.
    */
-  stream?(options?: { integrity?: boolean }): TranscriptStream;
+  stream?(options?: StreamOptions): TranscriptStream;
   /** Whether `fromAtxf` can write the whole tree (`carry: false, tree: true`), keeping what native held (SPEC §11.2). */
   readonly tree?: boolean;
 }
@@ -35,9 +35,37 @@ export interface Converter {
  * stream's hashes are its own and stay the same however long the file grows. A stream keeps the ids and hashes it
  * needs to resolve later references, never the records, so it reads a file of any length.
  */
+export interface StreamOptions {
+  /** Hash records (SPEC §17). Default true. A resumed stream hashes as the stream it resumes did. */
+  integrity?: boolean;
+  /**
+   * Go on from a stream saved with `state()`: pushing the lines after it returns the records, hashes included, the
+   * saved stream would have returned. Throws a `RangeError` for a state from another reader version.
+   */
+  resume?: StreamState;
+}
+
+/**
+ * A stream's state as JSON, to save and resume it (e.g. across evictions of the process reading a live file). It
+ * holds the header and what reading later lines needs: every record's id, parent, type and hash, which native ids
+ * resolve to, and tool call ids. That grows with the number of records, never with their content. `stream` names
+ * the reader's version; another version refuses the state.
+ */
+export interface StreamState {
+  stream: string;
+  integrity: boolean;
+  /** Lines read, blank ones aside. */
+  lines: number;
+  header: TranscriptHeader | null;
+  reader: unknown;
+  hasher: unknown;
+}
+
 export interface TranscriptStream {
   /** The header, once the first line has been read. */
   readonly header: TranscriptHeader | undefined;
+  /** The state to resume from (`stream({ resume })`) after the lines pushed so far. JSON; take it between pushes. */
+  state(): StreamState;
   /**
    * Reads the next line, without its newline, and returns the records it adds: none for a line the header took or
    * a blank one. Never throws for what a line holds: a line that is not JSON, or has no ATXF form, becomes a custom
@@ -99,6 +127,10 @@ export class IdAllocator {
   private used = new Set<string>();
   constructor(existing: Iterable<string> = []) {
     for (const id of existing) this.used.add(id);
+  }
+  /** Every id taken, in UTF-16 order. */
+  taken(): string[] {
+    return [...this.used].sort();
   }
   /** `preferred` when free, otherwise `preferred-2`, `preferred-3`, … */
   take(preferred: string): string {

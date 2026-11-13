@@ -284,3 +284,37 @@ fn opencode_message_ids_are_scoped_to_the_session_they_are_written_for() {
     assert!(other.iter().all(|id| !own.contains(id)), "{other:?} reuses {own:?}");
     assert_eq!(opencode.from_atxf_for(&native, true, Some(&own_session)).unwrap(), text);
 }
+
+/// Pushes `lines` through `stream` and returns the records.
+fn pushed(stream: &mut formats::PiStream, lines: &[&str]) -> Vec<atxf::json::Map> {
+    lines.iter().flat_map(|line| stream.push(line)).collect()
+}
+
+#[test]
+fn a_pi_stream_reads_what_to_atxf_reads_and_resumes_from_its_state_after_any_line() {
+    let text = read("fixtures/pi/session-every-field.jsonl");
+    let lines: Vec<&str> = text.lines().collect();
+    let whole = formats::by_agent("pi").expect("pi").to_atxf(&text, true).expect("decodes");
+    let mut stream = formats::PiStream::new(true);
+    let records = pushed(&mut stream, &lines);
+    let mut header = whole.header.clone();
+    if let Some(Value::Object(fidelity)) = header.get_mut("fidelity") {
+        fidelity.shift_remove("nativeDigest");
+    }
+    let streamed = stream.header().cloned().expect("a header");
+    // The stream's header has no digest of the file, so its records hash against a header of their own.
+    assert_eq!(atxf::integrity::without_hash(&streamed), atxf::integrity::without_hash(&header));
+    assert_eq!(records.len(), whole.records.len());
+    for cut in 0..=lines.len() {
+        let mut first = formats::PiStream::new(true);
+        let mut got = pushed(&mut first, &lines[..cut]);
+        let saved = atxf::json::parse(&atxf::json::stringify(&first.state())).expect("JSON");
+        let mut resumed = formats::PiStream::resume(&saved).expect("resumes");
+        got.extend(pushed(&mut resumed, &lines[cut..]));
+        assert_eq!(got, records, "cut after line {cut}");
+        assert_eq!(resumed.header(), Some(&streamed), "cut after line {cut}");
+    }
+    let mut other = stream.state();
+    other["stream"] = Value::String("pi/session-jsonl stream 0".into());
+    assert!(formats::PiStream::resume(&other).is_err());
+}

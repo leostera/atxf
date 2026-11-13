@@ -123,6 +123,43 @@ export class TreeBuilder {
     this.observe(full);
     return full;
   }
+
+  /** What the builder knows, as JSON, keys in UTF-16 order so every implementation writes the same (see `restore`). */
+  state(): TreeState {
+    if (this.continuesFrom !== null) throw new RangeError("a continuation's tree has no state");
+    const sorted = <V>(map: Map<string, V>) => [...map].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return {
+      resolved: sorted(this.resolved).map(([native, id]) => (native === id ? native : [native, id])),
+      nodes: sorted(this.parents).map(([id, parent]) => [id, parent, this.types.get(id)!]),
+      toolCalls: sorted(this.toolCalls),
+      last: this.last,
+    };
+  }
+
+  /** Picks up where the builder whose `state()` this is left off. */
+  restore(state: TreeState) {
+    for (const entry of state.resolved) {
+      if (typeof entry === "string") this.resolved.set(entry, entry);
+      else this.resolved.set(entry[0], entry[1]);
+    }
+    for (const [id, parent, type] of state.nodes) {
+      this.parents.set(id, parent);
+      this.types.set(id, type);
+    }
+    for (const [call, owners] of state.toolCalls) this.toolCalls.set(call, [...owners]);
+    this.last = state.last;
+  }
+}
+
+/**
+ * A `TreeBuilder` as JSON: native ids and the record each resolves to (a bare id resolves to itself), tree records
+ * with their parents and types, tool call ids with the messages holding them, and the last tree record.
+ */
+export interface TreeState {
+  resolved: (string | [string, string | null])[];
+  nodes: [string, string | null, string][];
+  toolCalls: [string, string[]][];
+  last: string | null;
 }
 
 /** Keeps the keys of `value` whose values are not `undefined`. */

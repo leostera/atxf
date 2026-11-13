@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { pi } from "../src/formats/pi.ts";
+import { readFileSync } from "node:fs";
+import { PI_STREAM_STATE, pi } from "../src/formats/pi.ts";
+import { sha256 } from "../src/canonical.ts";
+import { serializeTranscript } from "../src/jsonl.ts";
 
 const session = JSON.stringify({ type: "session", version: 3, id: "s-1", timestamp: "2026-11-08T10:00:00.000Z", cwd: "/w" });
 const user = (id: string, parentId: string | null, text: string) =>
@@ -61,4 +64,37 @@ describe("pi.stream", () => {
     const { native: _, ...bare } = record!;
     expect(pi.fromAtxf({ header: reading.header!, records: [bare as never] }, { carry: false, tree: true }).split("\n")[1]).toBe("not json");
   });
+
+  test("a state from another reader version, or not a state at all, is refused", () => {
+    const reading = pi.stream!();
+    reading.push(session);
+    const state = reading.state();
+    expect(state.stream).toBe(PI_STREAM_STATE);
+    expect(() => pi.stream!({ resume: { ...state, stream: "pi/session-jsonl stream 0" } })).toThrow(RangeError);
+    expect(() => pi.stream!({ resume: { ...state, hasher: null } })).toThrow(RangeError);
+    expect(() => pi.stream!({ resume: { ...state, reader: { hasContext: "no" } } })).toThrow(RangeError);
+    expect(() => pi.stream!({ resume: state })).not.toThrow();
+  });
+
+  test("a state before the first line resumes as a new stream", () => {
+    const state = pi.stream!().state();
+    expect(state).toMatchObject({ lines: 0, header: null, reader: null, hasher: null });
+    const resumed = pi.stream!({ resume: state });
+    resumed.push(session);
+    expect(resumed.header).toMatchObject({ id: "s-1", integrity: { alg: "sha256" } });
+  });
+
+  // Reading that changes must bump PI_STREAM_STATE, or a saved state would be resumed by a reader that reads
+  // differently. Each version pins what it reads. When this fails, bump the version and add its digest; never
+  // change the digest of a version that was released.
+  test("the stream state version is pinned to what the reader reads", () => {
+    const text = readFileSync(new URL("../../../fixtures/pi/session-every-field.jsonl", import.meta.url), "utf8");
+    const digest = sha256(serializeTranscript(pi.toAtxf(text)));
+    expect({ version: PI_STREAM_STATE, digest }).toEqual({ version: PI_STREAM_STATE, digest: PINNED[PI_STREAM_STATE] });
+  });
 });
+
+/** What each stream state version reads from `fixtures/pi/session-every-field.jsonl`: the transcript's sha256. */
+const PINNED: Record<string, string> = {
+  "pi/session-jsonl stream 1": "8e5d53686c07f62573c274519d1c26391e177aeef4966704fa61dab353a6aad0",
+};

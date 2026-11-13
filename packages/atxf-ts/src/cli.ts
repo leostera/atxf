@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { parseTranscript, serializeTranscript } from "./jsonl.ts";
 import { formats } from "./formats/index.ts";
 import { reconcile } from "./reconcile.ts";
@@ -13,11 +13,13 @@ const USAGE = `usage:
   atxf convert --from <agent|atxf> --to <agent|atxf> [--no-carry [--tree]] <file>   writes to stdout
   atxf fidelity --from <agent> [--json] <file|dir>...                            what survives without native
   atxf reconcile <copy.atxf.jsonl>...                                           writes to stdout
+  atxf stream --from <agent> [--no-integrity] [--lines <first>:<last>] [--resume <state.json>] [--state <state.json>] <file>
+      pushes the file's lines (1-based, inclusive) one at a time; writes each record, then the header, to stdout
 
 agents: ${Object.keys(formats).join(", ")}`;
 
 const [command, ...args] = process.argv.slice(2);
-const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand, fidelity: fidelityCommand };
+const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand, fidelity: fidelityCommand, stream: streamCommand };
 const run = command === undefined ? undefined : commands[command];
 // Set the exit code rather than calling `process.exit`, which would cut off output still being written to a pipe.
 process.exitCode = run === undefined ? usage() : await run(args);
@@ -49,6 +51,38 @@ async function convert(args: string[]): Promise<number> {
   const text = await readFile(file, "utf8");
   const transcript = from === "atxf" ? parseTranscript(text) : formats[from!]!.toAtxf(text);
   process.stdout.write(to === "atxf" ? serializeTranscript(transcript) : formats[to!]!.fromAtxf(transcript, { carry, tree }));
+  return 0;
+}
+
+async function streamCommand(args: string[]): Promise<number> {
+  const option = (name: string) => {
+    const at = args.indexOf(name);
+    return at === -1 ? undefined : args.splice(at, 2)[1];
+  };
+  const from = option("--from");
+  const range = option("--lines");
+  const resume = option("--resume");
+  const save = option("--state");
+  const integrity = !args.includes("--no-integrity");
+  const [file] = args.filter((arg) => arg !== "--no-integrity");
+  const stream = from === undefined ? undefined : formats[from]?.stream?.bind(formats[from]);
+  const bounds = range?.match(/^(\d+):(\d+)$/);
+  if (stream === undefined || file === undefined || (range !== undefined && !bounds)) return usage();
+  const lines = (await readFile(file, "utf8")).split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const [first, last] = bounds ? [Math.max(1, Number(bounds[1])), Number(bounds[2])] : [1, lines.length];
+  let reading;
+  try {
+    reading = stream(resume === undefined ? { integrity } : { resume: JSON.parse(await readFile(resume, "utf8")) });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  const out: string[] = [];
+  for (const line of lines.slice(first - 1, last)) for (const record of reading.push(line)) out.push(JSON.stringify(record));
+  out.push(JSON.stringify(reading.header ?? null));
+  process.stdout.write(`${out.join("\n")}\n`);
+  if (save !== undefined) await writeFile(save, `${JSON.stringify(reading.state())}\n`);
   return 0;
 }
 

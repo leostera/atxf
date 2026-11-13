@@ -200,6 +200,50 @@ impl TranscriptHasher {
         Ok(hash)
     }
 
+    /// What the hasher knows, as JSON, as `TranscriptHasher.state` writes it in TypeScript: each record's hash, the
+    /// records nothing references yet, ids referenced before their record, the chain and the count.
+    pub fn state(&self) -> Value {
+        let sort = |mut ids: Vec<String>| {
+            ids.sort_by(|a, b| json::cmp_utf16(a, b));
+            Value::Array(ids.into_iter().map(Value::String).collect())
+        };
+        let mut hashes: Vec<(&String, &Hash)> = self.hashes.iter().collect();
+        hashes.sort_by(|a, b| json::cmp_utf16(a.0, b.0));
+        let dag: HashSet<&String> = self.dag_ids.iter().collect();
+        Obj::new()
+            .set(
+                "hashes",
+                Value::Array(
+                    hashes
+                        .into_iter()
+                        .map(|(id, hash)| Value::Array(vec![Value::String(id.clone()), Value::String(hash.clone())]))
+                        .collect(),
+                ),
+            )
+            .set("unreferenced", sort(self.dag_ids.iter().filter(|id| !self.referenced.contains(*id)).cloned().collect()))
+            .set("forward", sort(self.referenced.iter().filter(|id| !dag.contains(id)).cloned().collect()))
+            .set("chain", self.chain.as_str())
+            .set("count", json::number(self.count as f64))
+            .value()
+    }
+
+    /// A hasher for `header` (without its hash) that goes on from `state`; `None` when `state` is not one.
+    pub fn resume(header: Map, state: &Value) -> Option<Self> {
+        let ids = |key: &str| state.arr(key)?.iter().map(|id| id.as_str().map(str::to_string)).collect::<Option<Vec<_>>>();
+        let mut hasher = Self::new(header);
+        for pair in state.arr("hashes")? {
+            let pair = pair.as_array().filter(|p| p.len() == 2)?;
+            hasher.hashes.insert(pair[0].as_str()?.to_string(), pair[1].as_str()?.to_string());
+        }
+        // Only which records are heads matters to a seal, not their order: a referenced record is never one again.
+        hasher.dag_ids = ids("unreferenced")?;
+        hasher.referenced = ids("forward")?.into_iter().collect();
+        hasher.chain = state.str("chain")?.to_string();
+        let count = state.field("count").and_then(json::as_f64).filter(|n| n.fract() == 0.0 && *n >= 0.0)?;
+        hasher.count = count as usize;
+        Some(hasher)
+    }
+
     /// The commitment a `seal` record appended now would carry.
     pub fn commitment(&self) -> Commitment {
         let mut heads: Vec<Hash> =

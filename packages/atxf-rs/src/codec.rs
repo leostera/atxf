@@ -13,7 +13,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::canonical::{canonical_json, sha256};
 use crate::integrity::{add_integrity_owned, without_hash};
-use crate::json::{Get, Map, Obj, Value};
+use crate::json::{Get, Map, Obj, Value, cmp_utf16};
+
+fn sorted(mut keys: Vec<&String>) -> Vec<&String> {
+    keys.sort_by(|a, b| cmp_utf16(a, b));
+    keys
+}
+
+fn opt_value(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, |s| Value::String(s.to_string()))
+}
 use crate::native::{Framing, Unit, is_pure_native, native_units};
 use crate::transcript::{Error, Record, Transcript};
 use crate::tree::index_tree;
@@ -238,6 +247,13 @@ impl IdAllocator {
         Self { used: existing.into_iter().collect() }
     }
 
+    /// Every id taken, in UTF-16 order.
+    pub fn taken(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.used.iter().cloned().collect();
+        ids.sort_by(|a, b| cmp_utf16(a, b));
+        ids
+    }
+
     /// `preferred` when free, otherwise `preferred-2`, `preferred-3`, …
     pub fn take(&mut self, preferred: &str) -> String {
         let mut id = preferred.to_string();
@@ -266,6 +282,8 @@ pub struct TreeBuilder<'a> {
     pub last: Option<String>,
     /// The carried transcript's active leaf, in a continuation.
     continues_from: Option<String>,
+    /// Whether `records` keeps what is pushed; not when reading a file of any length as a stream.
+    retain: bool,
 }
 
 impl<'a> TreeBuilder<'a> {
@@ -278,6 +296,7 @@ impl<'a> TreeBuilder<'a> {
             tool_calls: HashMap::new(),
             last: None,
             continues_from: None,
+            retain: true,
             context,
         };
         if let Some(base) = tree.context.base {
@@ -369,6 +388,88 @@ impl<'a> TreeBuilder<'a> {
 
     pub fn has_tool_call(&self, id: &str) -> bool {
         self.tool_calls.contains_key(id)
+    }
+
+    /// A builder that keeps no records, to read a file of any length as a stream.
+    pub fn streaming(context: DecodeContext<'a>) -> Self {
+        Self { retain: false, ..Self::new(context) }
+    }
+
+    /// Observes a record, with `native` when given, and returns it; kept in `records` unless streaming.
+    pub fn push_owned(&mut self, record: Map, native: Option<Map>) -> Map {
+        let full = match native {
+            Some(native) => Obj::new().spread(&record).set("native", Value::Object(native)).build(),
+            None => record,
+        };
+        self.observe(&full);
+        if self.retain {
+            self.records.push(full.clone());
+        }
+        full
+    }
+
+    /// What the builder knows, as JSON, keys in UTF-16 order, as `TreeBuilder.state` writes it in TypeScript.
+    pub fn state(&self) -> Value {
+        let resolved = sorted(self.resolved.keys().collect())
+            .into_iter()
+            .map(|native| match &self.resolved[native] {
+                Some(id) if id == native => Value::String(native.clone()),
+                id => Value::Array(vec![Value::String(native.clone()), opt_value(id.as_deref())]),
+            })
+            .collect();
+        let nodes = sorted(self.parents.keys().collect())
+            .into_iter()
+            .map(|id| {
+                let kind = self.types.get(id).cloned().unwrap_or_default();
+                Value::Array(vec![Value::String(id.clone()), opt_value(self.parents[id].as_deref()), Value::String(kind)])
+            })
+            .collect();
+        let tool_calls = sorted(self.tool_calls.keys().collect())
+            .into_iter()
+            .map(|call| {
+                let owners = self.tool_calls[call].iter().cloned().map(Value::String).collect();
+                Value::Array(vec![Value::String(call.clone()), Value::Array(owners)])
+            })
+            .collect();
+        Obj::new()
+            .set("resolved", Value::Array(resolved))
+            .set("nodes", Value::Array(nodes))
+            .set("toolCalls", Value::Array(tool_calls))
+            .set("last", opt_value(self.last.as_deref()))
+            .value()
+    }
+
+    /// Picks up where the builder whose `state()` this is left off; `None` when `state` is not one.
+    pub fn restore(&mut self, state: &Value) -> Option<()> {
+        let nullable = |value: &Value| match value {
+            Value::Null => Some(None),
+            Value::String(s) => Some(Some(s.clone())),
+            _ => None,
+        };
+        for entry in state.arr("resolved")? {
+            match entry {
+                Value::String(id) => {
+                    self.resolved.insert(id.clone(), Some(id.clone()));
+                }
+                Value::Array(pair) if pair.len() == 2 => {
+                    self.resolved.insert(pair[0].as_str()?.to_string(), nullable(&pair[1])?);
+                }
+                _ => return None,
+            }
+        }
+        for node in state.arr("nodes")? {
+            let node = node.as_array().filter(|n| n.len() == 3)?;
+            let id = node[0].as_str()?.to_string();
+            self.parents.insert(id.clone(), nullable(&node[1])?);
+            self.types.insert(id, node[2].as_str()?.to_string());
+        }
+        for pair in state.arr("toolCalls")? {
+            let pair = pair.as_array().filter(|p| p.len() == 2)?;
+            let owners = pair[1].as_array()?.iter().map(|o| o.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
+            self.tool_calls.insert(pair[0].as_str()?.to_string(), owners);
+        }
+        self.last = nullable(state.field("last")?)?;
+        Some(())
     }
 
     /// Appends a record, with `native` when given.
