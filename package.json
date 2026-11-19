@@ -13,7 +13,7 @@
     "check": "bun run --cwd packages/atxf-ts build && tsc --noEmit && bun test",
     "check:rust": "cargo fmt --check --manifest-path packages/atxf-rs/Cargo.toml && cargo clippy --manifest-path packages/atxf-rs/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path packages/atxf-rs/Cargo.toml",
     "cross-check": "scripts/cross-check.sh && bun scripts/cross-check-generated.ts",
-    "e2e": "bun packages/pi-atxf/test/e2e.ts && bun packages/opencode-atxf/test/e2e.ts && bun test/e2e/pi-opencode.ts"
+    "e2e": "bun packages/pi-atxf/test/e2e.ts && bun packages/opencode-atxf/test/e2e.ts && bun test/e2e/pi-opencode.ts && bun test/e2e/linearize.ts"
   },
   "devDependencies": {
     "@leostera/atxf": "workspace:*",
