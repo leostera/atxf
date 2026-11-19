@@ -230,6 +230,8 @@ export interface TranscriptHeader {
     vcs?: { type: string; remote?: string; branch?: string; commit?: string };
   };
   parent?: TranscriptLink;
+  /** Transcripts reconciled into this one beyond its own copies (forks, subagents), sorted (SPEC §18). */
+  merged?: string[];
   fidelity?: Fidelity;
   integrity?: { alg: "sha256"; canon: "jcs" };
   native?: Native;

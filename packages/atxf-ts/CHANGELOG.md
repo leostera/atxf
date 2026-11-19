@@ -12,6 +12,17 @@ All notable changes to `@leostera/atxf`. Versions are the package's own; every r
   `atxf linearize --from pi --to pi a.jsonl b.jsonl`. It works on all 2,614 local Pi sessions. In those that branch
   and never compacted, every message is in context afterwards (151 instead of 17 in one). Also in the Rust crate and
   CLI.
+- **`reconcile` merges forks and subagents back** (SPEC §18): inputs whose header `parent` names the session (or a
+  transcript already merged into it) join it. What a fork copied from the session is the same records, so its own
+  turns continue from where it forked. A subagent that starts afresh hangs under the entry `parent.entryId` names.
+  The result lists what it absorbed in the new header field `merged`. The reconcile laws hold with forks and
+  subagents too: order, grouping and repetition don't change the result. So `atxf linearize --from pi --to pi
+  main.jsonl fork-*.jsonl` brings 10 `pi --fork` subagents back into one session, and Pi then names all 10
+  suggestions (`test/e2e/linearize.ts fan-out`). All 252 local Pi fork pairs merge. Files given together also link
+  by path, since Pi records its parent's file path, so sessions whose file names don't match their ids (`mu`) link
+  too.
+- **Pi:** `parent.transcriptId` is now the parent's session id, from the file name Pi records. It used to be the path,
+  which is still in `uri`. Writing back is unchanged.
 - **`reconcile` refuses copies read differently** (SPEC §18). Two copies of a session share no record but start
   with the same first answer when one was converted without carry: every record has a different key, and their
   union held the whole conversation twice, so linearizing gave the next agent every prompt twice. Found by

@@ -325,7 +325,12 @@ fn session_header(session: &Map) -> Map {
                 .opt("sessionId", session.str("id")),
         )
         .opt("workspace", session.str("cwd").map(|cwd| Obj::new().set("cwd", cwd)))
-        .opt("parent", session.nonempty("parentSession").map(|p| Obj::new().set("transcriptId", p).set("uri", p).set("relation", "fork")))
+        .opt(
+            "parent",
+            session
+                .nonempty("parentSession")
+                .map(|p| Obj::new().set("transcriptId", parent_session_id(p)).set("uri", p).set("relation", "fork")),
+        )
         .set(
             "fidelity",
             Obj::new().set("topology", "tree").set("instructions", "full").set("tools", "full").set("native", "all").set("ids", "stable"),
@@ -1402,4 +1407,16 @@ fn pi_user_content(content: Option<&Value>) -> Value {
         Some(other) => other.clone(),
         None => Value::Null,
     }
+}
+
+/// The session id a Pi `parentSession` names, as `parentSessionId` in `pi.ts`: Pi records the parent's file path and
+/// names session files `<time>_<session id>.jsonl`; any other value is taken as the id itself.
+pub fn parent_session_id(parent_session: &str) -> &str {
+    let Some(stem) = parent_session.strip_suffix(".jsonl") else { return parent_session };
+    let Some((_, id)) = stem.rsplit_once('_') else { return parent_session };
+    let shape = id.len() == 36
+        && id
+            .char_indices()
+            .all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_digit() || ('a'..='f').contains(&c) });
+    if shape { id } else { parent_session }
 }

@@ -107,6 +107,35 @@ fc.assert(
   { numRuns: runs },
 );
 
+// A fork of a generated transcript, and a subagent under one of its entries, reconciled into it.
+fc.assert(
+  fc.property(arbitraryTranscript({ integrity: false }), fc.nat(), fc.nat(), (transcript, cut, at) => {
+    const records = transcript.records.filter((record) => record.type !== "seal");
+    const tree = records.filter((record) => "parentId" in record);
+    const { hash: _h, integrity: _i, ...header } = transcript.header;
+    const fork = { header: { ...header, id: "fork", parent: { transcriptId: header.id, relation: "fork" as const } }, records: records.slice(0, records.length ? 1 + (cut % records.length) : 0) };
+    const entryId = tree.length ? tree[at % tree.length]!.id : undefined;
+    const sub = {
+      header: { ...header, id: "sub", parent: { transcriptId: header.id, relation: "subagent" as const, ...(entryId ? { entryId } : {}) } },
+      records: [{ type: "message" as const, id: "sub-1", parentId: null, time: header.time, role: "user" as const, content: "look around" }],
+    };
+    const base = { header, records };
+    let expected: string;
+    try {
+      expected = serializeTranscript(reconcile([base, fork, sub]).transcript);
+    } catch {
+      return true;
+    }
+    const [fileA, fileB] = [join(work, "base.atxf.jsonl"), join(work, "fork.atxf.jsonl")];
+    writeFileSync(fileA, serializeTranscript(base));
+    writeFileSync(fileB, serializeTranscript(fork));
+    const actual = rs(["reconcile", fileA, fileB], serializeTranscript(sub), "sub.atxf.jsonl").out;
+    same("reconcile fork and subagent", expected, actual, `${serializeTranscript(base)}\n---\n${serializeTranscript(fork)}\n---\n${serializeTranscript(sub)}`);
+    return true;
+  }),
+  { numRuns: runs },
+);
+
 // Linearizing generated transcripts, which branch, and writing them out for every agent.
 fc.assert(
   fc.property(arbitraryTranscript(), fc.constantFrom("atxf", ...agents), (transcript, to) => {

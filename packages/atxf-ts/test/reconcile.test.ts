@@ -3,7 +3,7 @@ import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { codex } from "../src/formats/codex.ts";
 import { pi } from "../src/formats/pi.ts";
-import { indexTree, serializeTranscript, validateTranscript, verifyIntegrity, addIntegrity, type EntryRecord, type Transcript } from "../src/index.ts";
+import { indexTree, parseTranscript, serializeTranscript, validateTranscript, verifyIntegrity, addIntegrity, type EntryRecord, type Transcript } from "../src/index.ts";
 import { arbitraryTranscript } from "../src/testing.ts";
 import { inSync, reconcile, reconciliationKeys } from "../src/reconcile.ts";
 
@@ -145,5 +145,86 @@ describe("copies read differently", () => {
       ] as EntryRecord[],
     });
     expect(reconcile([copy("hi from the studio", 1), copy("hi from the laptop", 3)]).transcript.records).toHaveLength(4);
+  });
+});
+
+/**
+ * Linked transcripts: forks that copied a prefix of the session and continued, and subagents that start afresh under
+ * an entry of it. They reconcile into the session with the laws of copies.
+ */
+describe("reconciling forks and subagents", () => {
+  /** A transcript linked to `base`: a fork of its first `cut` records, or a subagent under its record at `cut`. */
+  function child(base: Transcript, other: Transcript, n: number, cut: number, kind: "fork" | "subagent"): Transcript {
+    const records = base.records.filter((record) => record.type !== "seal").map(strip);
+    const id = `child-${n}`;
+    // The other transcript's records under the child's own ids, every reference among them renamed alike.
+    const suffix = other.records
+      .filter((record) => record.type !== "seal")
+      .map(strip)
+      .map((record) => {
+        const copy = { ...record, id: `${id}-${record.id}` } as Record<string, unknown>;
+        for (const field of ["parentId", "targetId", "fromId", "firstKeptId", "restoreCheckpointId", "toolCallId"]) if (typeof copy[field] === "string") copy[field] = `${id}-${copy[field]}`;
+        // Tool call ids are unique along a path, so the child's are its own too.
+        if (Array.isArray(copy.content)) copy.content = (copy.content as { type: string; id?: string }[]).map((block) => (block.type === "tool_call" ? { ...block, id: `${id}-${block.id}` } : block));
+        return copy as unknown as EntryRecord;
+      });
+    const { hash: _h, integrity: _i, ...header } = base.header;
+    const tree = records.filter(isTree);
+    if (kind === "fork") {
+      const kept = records.slice(0, Math.max(1, cut % (records.length + 1)));
+      const tip = kept.filter(isTree).at(-1)?.id ?? null;
+      const rest = suffix.map((record) => ("parentId" in record && record.parentId === null ? ({ ...record, parentId: tip } as EntryRecord) : record));
+      return { header: { ...header, id, parent: { transcriptId: base.header.id, relation: "fork" } }, records: [...kept, ...rest] };
+    }
+    const entryId = tree.length ? tree[cut % tree.length]!.id : undefined;
+    return { header: { ...header, id, parent: { transcriptId: base.header.id, relation: "subagent", ...(entryId ? { entryId } : {}) } }, records: suffix };
+  }
+  const isTree = (record: EntryRecord) => "parentId" in record;
+
+  const families = arbitraryTranscript({ maxRecords: 10, integrity: false }).chain((base) =>
+    fc
+      .array(fc.record({ other: arbitraryTranscript({ maxRecords: 6, integrity: false }), cut: fc.nat(), kind: fc.constantFrom("fork" as const, "subagent" as const) }), { minLength: 1, maxLength: 3 })
+      .map((children) => ({ base, children: children.map(({ other, cut, kind }, n) => child(base, other, n, cut, kind)) })),
+  );
+  const linked = (name: string, check: (family: { base: Transcript; children: Transcript[] }) => void) =>
+    test(name, () => fc.assert(fc.property(families, check), { numRuns: RUNS }));
+
+  linked("the result is the session's, valid, and names every child it merged", ({ base, children }) => {
+    const { transcript } = reconcile([base, ...children]);
+    expect(validateTranscript(text(transcript)).diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(transcript.header.id).toBe(base.header.id);
+    expect(transcript.header.merged).toEqual(children.map((c) => c.header.id).sort());
+  });
+
+  linked("a subagent's first records hang under the entry it names", ({ base, children }) => {
+    const { transcript } = reconcile([base, ...children]);
+    const byId = new Map(transcript.records.map((record) => [record.id, record]));
+    for (const c of children) {
+      const entry = c.header.parent?.entryId;
+      if (c.header.parent?.relation !== "subagent" || entry === undefined) continue;
+      for (const root of c.records.filter((r) => "parentId" in r && r.parentId === null)) {
+        const placed = [...byId.values()].find((r) => r.id === root.id || r.id.startsWith(`${root.id}~`)) as { parentId?: string | null } | undefined;
+        expect(placed?.parentId === entry || placed?.parentId?.startsWith(`${entry}~`)).toBe(true);
+      }
+    }
+  });
+
+  linked("order, grouping and repetition do not matter", ({ base, children }) => {
+    const all = text(merge(base, ...children));
+    expect(text(merge(...[...children].reverse(), base))).toBe(all);
+    expect(text(merge(children.reduce((acc, c) => merge(acc, c), base)))).toBe(all);
+    expect(text(merge(merge(base, ...children), ...children))).toBe(all);
+  });
+
+  test("an OpenCode subagent joins its parent under the spawn", () => {
+    const read = (name: string) => parseTranscript(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
+    const { transcript } = reconcile([read("revert-and-subagent.atxf.jsonl"), read("subagent-child.atxf.jsonl")]);
+    expect(transcript.header.merged).toEqual(["ses_child"]);
+    expect((transcript.records.find((r) => r.id === "s1") as { parentId: string }).parentId).toBe("o5");
+  });
+
+  test("a session that links to none of the others is still refused", () => {
+    const read = (name: string) => parseTranscript(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
+    expect(() => reconcile([read("minimal.atxf.jsonl"), read("subagent-child.atxf.jsonl")])).toThrow(/copies of different sessions/);
   });
 });

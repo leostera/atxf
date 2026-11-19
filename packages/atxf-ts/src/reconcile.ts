@@ -62,21 +62,32 @@ interface Keyed {
   time: number;
 }
 
-/** Reconcile copies of one session into one transcript that keeps every record of every copy. */
+/**
+ * Reconcile copies of one session into one transcript that keeps every record of every copy.
+ *
+ * Transcripts linked to the session join too (SPEC §18): a fork or a subagent whose header `parent` names the session,
+ * or a transcript already reconciled into it (`merged`). What a fork copied from the session is the same records;
+ * what it adds continues from them, and a transcript that starts afresh hangs under the entry `parent.entryId` names.
+ */
 export function reconcile(copies: readonly Transcript[], options: ReconcileOptions = {}): ReconcileResult {
   if (copies.length === 0) throw new Error("reconcile needs at least one copy");
-  const sessionId = copies[0]!.header.id;
-  for (const copy of copies) {
-    if (copy.header.id !== sessionId) throw new Error(`copies of different sessions: \`${sessionId}\` and \`${copy.header.id}\``);
-  }
+  const { sessionId, roots, order, targets } = arrange(copies);
 
   const problems = copies.flatMap((copy, index) => {
     const found = copy.header.integrity ? verifyIntegrity(copy) : [];
     return found.length ? [{ copy: index, problems: found }] : [];
   });
 
-  const keyed = copies.map(keyCopy);
-  const twice = readTwice(copies, keyed);
+  // Each transcript is keyed after the ones it links to, so its graft point has a key.
+  const keyed: Keyed[][] = [];
+  const keyOf: Map<string, Hash>[] = [];
+  for (const index of order) {
+    const graft = graftFor(copies[index]!, targets.get(index) ?? [], keyed, keyOf);
+    const result = keyCopy(copies[index]!, graft);
+    keyed[index] = result.keyed;
+    keyOf[index] = result.keyOf;
+  }
+  const twice = readTwice(copies, keyed, targets);
   if (twice !== undefined) {
     throw new Error(
       `copies ${twice[0] + 1} and ${twice[1] + 1} of \`${sessionId}\` hold the same conversation but share no record: one was read differently (converted without carry?), and reconciling them would hold it twice`,
@@ -98,7 +109,12 @@ export function reconcile(copies: readonly Transcript[], options: ReconcileOptio
   const { ids, renamed } = assignIds(ordered);
   const records = ordered.map((keyed) => rewrite(keyed, ids));
 
-  const transcript: Transcript = { header: pickHeader(copies), records };
+  const header = pickHeader(roots.map((index) => copies[index]!));
+  const merged = [...new Set(copies.flatMap(known))].filter((id) => id !== sessionId).sort();
+  // Last in the header, as the Rust port writes it.
+  delete header.merged;
+  if (merged.length) header.merged = merged;
+  const transcript: Transcript = { header, records };
   const integrity = options.integrity ?? copies.some((copy) => copy.header.integrity !== undefined);
   if (!integrity) return { transcript, renamed, problems };
 
@@ -108,18 +124,83 @@ export function reconcile(copies: readonly Transcript[], options: ReconcileOptio
   return { transcript: addIntegrity(transcript, { seal }), renamed, problems };
 }
 
+/** The ids a transcript stands for: its own, and those reconciled into it. */
+const known = (copy: Transcript) => [copy.header.id, ...(copy.header.merged ?? [])];
+
 /**
- * Two copies that hold the same conversation read in different ways: they share no record, yet the model's first
+ * Which inputs are copies of the session and which link to it. An input links to another when its `parent` names
+ * that input's id or one reconciled into it; the roots link to none, and must be copies of one session. Inputs are
+ * keyed roots first, then each after every input it links to.
+ */
+function arrange(copies: readonly Transcript[]): { sessionId: string; roots: number[]; order: number[]; targets: Map<number, number[]> } {
+  const targets = new Map<number, number[]>();
+  copies.forEach((copy, index) => {
+    const parent = copy.header.parent?.transcriptId;
+    if (parent === undefined) return;
+    const to = copies.flatMap((other, at) => (at !== index && other.header.id !== copy.header.id && known(other).includes(parent) ? [at] : []));
+    if (to.length) targets.set(index, to);
+  });
+  const roots = copies.flatMap((_, index) => (targets.has(index) ? [] : [index]));
+  if (roots.length === 0) throw new Error("reconcile needs a session the others link to, and every input links to another");
+  const sessionId = copies[roots[0]!]!.header.id;
+  for (const index of roots) {
+    const id = copies[index]!.header.id;
+    if (id !== sessionId) throw new Error(`copies of different sessions: \`${sessionId}\` and \`${id}\``);
+  }
+  const order = [...roots];
+  const placed = new Set(roots);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [index, to] of targets) {
+      if (placed.has(index) || !to.every((at) => placed.has(at) || targets.get(at)?.includes(index))) continue;
+      order.push(index);
+      placed.add(index);
+      grew = true;
+    }
+  }
+  // Inputs that link to each other only: key them in input order, as copies of each other.
+  for (const index of targets.keys()) if (!placed.has(index)) order.push(index);
+  return { sessionId, roots, order, targets };
+}
+
+/**
+ * Where a linked transcript's new roots go: the record `parent.entryId` names in the inputs it links to (the
+ * smallest key when they disagree), and the keys it must not move, the records those inputs hold.
+ */
+function graftFor(copy: Transcript, targets: readonly number[], keyed: readonly Keyed[][], keyOf: readonly Map<string, Hash>[]): Graft | undefined {
+  const entry = copy.header.parent?.entryId;
+  if (entry === undefined || targets.length === 0) return undefined;
+  const candidates = targets.flatMap((at) => (keyOf[at]?.has(entry) ? [keyOf[at]!.get(entry)!] : [])).sort();
+  if (candidates.length === 0) return undefined;
+  return { key: candidates[0]!, shared: new Set(targets.flatMap((at) => (keyed[at] ?? []).map((record) => record.key))) };
+}
+
+interface Graft {
+  /** The key of the record new roots hang under. */
+  key: Hash;
+  /** Keys of the records the transcript links to: a root among them is shared, and stays a root. */
+  shared: Set<Hash>;
+}
+
+/**
+ * Two inputs that hold the same conversation read in different ways: they share no record, yet the model's first
  * answer is the same in both. A lossy conversion (one without carry) changes every record's key, so their union
  * would hold the conversation twice. Copies of a session forked before its first answer share no record either, but
  * each has its own first answer. Answers are compared on the active path, which every conversion writes.
+ *
+ * Only inputs that should share records are compared: copies of one transcript, and a fork with the transcript it
+ * links to. A subagent hung under an entry starts afresh, and siblings need share nothing but what they forked from.
  */
-function readTwice(copies: readonly Transcript[], keyed: readonly Keyed[][]): [number, number] | undefined {
+function readTwice(copies: readonly Transcript[], keyed: readonly Keyed[][], targets: ReadonlyMap<number, number[]>): [number, number] | undefined {
   const keys = keyed.map((records) => new Set(records.map((record) => record.key)));
   const answers = copies.map(firstAnswer);
+  const shouldShare = (a: number, b: number) =>
+    copies[a]!.header.id === copies[b]!.header.id ||
+    (targets.get(b)?.includes(a) === true && copies[b]!.header.parent?.entryId === undefined) ||
+    (targets.get(a)?.includes(b) === true && copies[a]!.header.parent?.entryId === undefined);
   for (let a = 0; a < copies.length; a++) {
     for (let b = a + 1; b < copies.length; b++) {
-      if (answers[a] === undefined || answers[a] !== answers[b]) continue;
+      if (!shouldShare(a, b) || answers[a] === undefined || answers[a] !== answers[b]) continue;
       if (![...keys[a]!].some((key) => keys[b]!.has(key))) return [a, b];
     }
   }
@@ -144,7 +225,7 @@ const DOMAIN = "atxf/0.1/reconcile\n";
  * §17 with ids left out, so renaming a record changes neither its key nor any other record's, and copies whose ids
  * are positions (shifted by a line one copy lacks) still agree on their shared records.
  */
-function keyCopy(copy: Transcript): Keyed[] {
+function keyCopy(copy: Transcript, graft?: Graft): { keyed: Keyed[]; keyOf: Map<string, Hash> } {
   const keyOf = new Map<string, Hash>();
   const out: Keyed[] = [];
   copy.records.forEach((record, index) => {
@@ -171,16 +252,23 @@ function keyCopy(copy: Transcript): Keyed[] {
       refs.set("of", resolve("native.of", of));
       content.native = { ...unhashed.native, of: "" };
     }
-    const key: Hash = `sha256:${sha256(DOMAIN + canonicalJson({ content, refs: Object.fromEntries(refs) }))}`;
+    const digest = () => `sha256:${sha256(DOMAIN + canonicalJson({ content, refs: Object.fromEntries(refs) }))}` as Hash;
+    let key = digest();
+    // A root the linked transcript does not share hangs under its graft point, keyed as it stands in the result.
+    if (graft && refs.get("parentId") === null && !graft.shared.has(key)) {
+      content.parentId = "";
+      refs.set("parentId", graft.key);
+      key = digest();
+    }
     keyOf.set(record.id, key);
     out.push({ key, record: unhashed, refs, time: timeOf(record.time) });
   });
-  return out;
+  return { keyed: out, keyOf };
 }
 
 /** The reconciliation keys of a transcript's records. Two copies are in sync when their sets of keys are equal. */
 export function reconciliationKeys(transcript: Transcript): Set<Hash> {
-  return new Set(keyCopy(transcript).map((keyed) => keyed.key));
+  return new Set(keyCopy(transcript).keyed.map((keyed) => keyed.key));
 }
 
 /** Whether two copies hold the same records, whatever their ids, order, hashes or seals. */

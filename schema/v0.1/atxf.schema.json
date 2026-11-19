@@ -464,6 +464,12 @@
           "additionalProperties": false
         },
         "parent": { "$ref": "#/$defs/transcriptLink" },
+        "merged": {
+          "description": "Transcripts reconciled into this one beyond its own copies: forks and subagents (SPEC §18). Sorted, each once.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "fidelity": {
           "description": "What the producer could capture. Lets consumers know what is missing rather than guessing.",
           "type": "object",

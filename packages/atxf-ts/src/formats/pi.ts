@@ -197,11 +197,19 @@ function sessionHeader(session: J, native?: ReturnType<typeof nativeOf>): Transc
     workspace: typeof session.cwd === "string" ? { cwd: session.cwd } : undefined,
     parent:
       typeof session.parentSession === "string" && session.parentSession !== ""
-        ? { transcriptId: session.parentSession, uri: session.parentSession, relation: "fork" as const }
+        ? { transcriptId: parentSessionId(session.parentSession), uri: session.parentSession, relation: "fork" as const }
         : undefined,
     fidelity: { topology: "tree" as const, instructions: "full" as const, tools: "full" as const, native: "all" as const, ids: "stable" as const },
     native,
   });
+}
+
+/**
+ * The session id a Pi `parentSession` names. Pi records the parent's file path, and names session files
+ * `<time>_<session id>.jsonl`; any other value is taken as the id itself.
+ */
+export function parentSessionId(parentSession: string): string {
+  return /_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(parentSession)?.[1] ?? parentSession;
 }
 
 function entryRecord(unit: Unit, index: number, tree: TreeBuilder, context: DecodeContext, fallbackTime: string, hasContext: boolean): EntryRecord {

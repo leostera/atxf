@@ -160,11 +160,35 @@ fn stream_command(mut args: Vec<String>) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Files given together link by path too: a `parent.uri` naming another of the files links to that file's session,
+/// whatever the file is called (Pi records its parent's path). As `linkByPath` in `cli.ts`.
+fn link_by_path(files: &[String], mut transcripts: Vec<Transcript>) -> Vec<Transcript> {
+    let real = |path: &str| std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+    let paths: Vec<String> = files.iter().map(|f| real(f)).collect();
+    let ids: Vec<String> = transcripts.iter().map(|t| t.id().to_string()).collect();
+    for transcript in &mut transcripts {
+        let verified = transcript.header.contains_key("integrity") && atxf::integrity::verify_integrity(transcript).is_empty();
+        let Some(parent) = transcript.header.get_mut("parent").and_then(|p| p.as_object_mut()) else { continue };
+        let Some(uri) = parent.get("uri").and_then(|u| u.as_str()) else { continue };
+        let Some(at) = paths.iter().position(|p| *p == real(uri)) else { continue };
+        if parent.get("transcriptId").and_then(|t| t.as_str()) == Some(ids[at].as_str()) {
+            continue;
+        }
+        parent.insert("transcriptId".into(), atxf::json::Value::String(ids[at].clone()));
+        // The header is hashed, so a file whose hashes verified is hashed again; one that did not keeps its problems.
+        if verified && let Ok(hashed) = atxf::integrity::add_integrity(transcript, None) {
+            *transcript = hashed;
+        }
+    }
+    transcripts
+}
+
 fn reconcile_command(files: &[String]) -> Result<ExitCode, String> {
     if files.is_empty() {
         return Ok(usage());
     }
     let copies = files.iter().map(|f| parse_transcript(&read(f)?).map_err(|e| format!("{f}: {e}"))).collect::<Result<Vec<_>, _>>()?;
+    let copies = link_by_path(files, copies);
     let result = reconcile(&copies, None).map_err(|e| e.to_string())?;
     for (copy, found) in &result.problems {
         for p in found {
@@ -191,15 +215,16 @@ fn linearize_command(mut args: Vec<String>) -> Result<ExitCode, String> {
     if !known(&from) || !known(&to) || args.is_empty() {
         return Ok(usage());
     }
-    let mut copies = Vec::with_capacity(args.len());
+    let mut read_copies = Vec::with_capacity(args.len());
     for file in &args {
         let text = read(file)?;
         let copy = match formats::by_agent(&from) {
             Some(format) => format.to_atxf(&text, true),
             None => parse_transcript(&text),
         };
-        copies.push(copy.map_err(|e| format!("{file}: {e}"))?);
+        read_copies.push(copy.map_err(|e| format!("{file}: {e}"))?);
     }
+    let mut copies = link_by_path(&args, read_copies);
     let source = if copies.len() > 1 {
         let result = reconcile(&copies, None).map_err(|e| e.to_string())?;
         for (copy, found) in &result.problems {

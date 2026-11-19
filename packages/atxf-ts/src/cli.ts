@@ -6,7 +6,9 @@ import { reconcile } from "./reconcile.ts";
 import { linearize } from "./linearize.ts";
 import { validateTranscript } from "./validate.ts";
 import { addFidelity, emptyFidelity, formatFidelity, isLossless } from "./fidelity.ts";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
+import type { Transcript } from "./types.ts";
+import { addIntegrity, verifyIntegrity } from "./integrity.ts";
 import { join } from "node:path";
 
 const USAGE = `usage:
@@ -93,9 +95,30 @@ async function streamCommand(args: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * Files given together link by path too: a `parent.uri` naming another of the files links to that file's session,
+ * whatever the file is called (Pi records its parent's path).
+ */
+async function linkByPath(files: string[], transcripts: Transcript[]): Promise<Transcript[]> {
+  const real = await Promise.all(files.map((file) => realpath(file).catch(() => file)));
+  return Promise.all(
+    transcripts.map(async (transcript) => {
+      const uri = transcript.header.parent?.uri;
+      if (uri === undefined) return transcript;
+      const at = real.indexOf(await realpath(uri).catch(() => uri));
+      const id = at < 0 ? undefined : transcripts[at]!.header.id;
+      if (id === undefined || id === transcript.header.parent!.transcriptId) return transcript;
+      const linked = { ...transcript, header: { ...transcript.header, parent: { ...transcript.header.parent!, transcriptId: id } } };
+      // The header is hashed, so a file whose hashes verify is hashed again; one that does not keeps its problems.
+      if (!transcript.header.integrity || verifyIntegrity(transcript).length > 0) return linked;
+      return addIntegrity(linked);
+    }),
+  );
+}
+
 async function reconcileCommand(files: string[]): Promise<number> {
   if (files.length === 0) return usage();
-  const copies = await Promise.all(files.map(async (file) => parseTranscript(await readFile(file, "utf8"))));
+  const copies = await linkByPath(files, await Promise.all(files.map(async (file) => parseTranscript(await readFile(file, "utf8")))));
   const { transcript, renamed, problems } = reconcile(copies);
   for (const { copy, problems: found } of problems) for (const p of found) console.error(`${files[copy]}: record ${p.index + 1}: ${p.message}`);
   for (const r of renamed) console.error(`renamed ${r.id} -> ${r.as}`);
@@ -113,7 +136,7 @@ async function linearizeCommand(args: string[]): Promise<number> {
   const known = (name: string) => name === "atxf" || name in formats;
   if (!known(from) || !known(to) || args.length === 0) return usage();
   const read = (text: string) => (from === "atxf" ? parseTranscript(text) : formats[from]!.toAtxf(text));
-  const copies = await Promise.all(args.map(async (file) => read(await readFile(file, "utf8"))));
+  const copies = await linkByPath(args, await Promise.all(args.map(async (file) => read(await readFile(file, "utf8")))));
   let source = copies[0]!;
   if (copies.length > 1) {
     const result = reconcile(copies);

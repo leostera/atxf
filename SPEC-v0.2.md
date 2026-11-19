@@ -287,7 +287,10 @@ The proof carries only digests of the other records on the path, not their conte
 
 ## 18. Reconciliation
 
-Copies of one session diverge when it is continued in two places. Reconciling copies (same header `id`) yields one transcript that keeps every record of every copy:
+Copies of one session diverge when it is continued in two places, and forks and sub-agents (§13) continue it in transcripts of their own. Reconciling copies (same header `id`), together with any transcripts linked to them, yields one transcript that keeps every record of every input:
+
+- **Linked transcripts.** An input links to another when its header `parent.transcriptId` is that input's `id` or one of its `merged` ids. The inputs that link to no other are the session, and MUST be copies of one transcript. A linked input joins the union like a copy: the records a fork copied from the session are the same records, so what it adds continues from the last of them. A linked input with `parent.entryId` naming a record of the inputs it links to hangs its roots under that record (the smallest key, if they hold several records under that id), except roots those inputs also hold. Its roots are keyed as they stand in the result, so reconciling the result with it again adds nothing. Without such an entry, roots it does not share stay roots.
+- **Header.** The result has the session's header (below), with `merged` set to the sorted ids of every other transcript reconciled into it (the linked inputs' ids and `merged`), or no `merged` when there are none.
 
 - **Same record.** Two records are the same when their reconciliation keys are equal. A key is a SHA-256 digest, under the domain tag `atxf/0.1/reconcile\n`, of the JCS form of `{content, refs}`, where `content` is the record without `hash`, with `id` and every reference field (§17.1, and `native.of`) set to `""`, and `refs` maps each reference field to the key of the record it names (or `null`). Keys ignore ids, so a record keeps its key when it is renamed, and copies with positional ids still agree on their shared records.
 - **Attribution.** It is part of `content`, so the same content written by two participants is two records, and both are kept.
@@ -295,7 +298,7 @@ Copies of one session diverge when it is continued in two places. Reconciling co
 - **Ids.** Of records sharing an id, the smallest key keeps it; the others become `id~<hex>`, the shortest prefix of their key's hex digest (at least 8 characters) that is free, and every reference follows. When copies hold one record under different ids, the smallest id is kept.
 - **Order.** Records are written referenced-first; among the records ready, earliest `time` first, then smallest key. The active leaf (§4) follows from that order, so copies holding the same records show the same place.
 - **Seals.** The copies' seals are dropped. When any copy declares integrity, the result is hashed and sealed.
-- **Copies read differently.** Two copies that share no record, yet give the same text for the first assistant message with text on their active paths, hold one conversation read in two ways: a conversion that kept less than the source (without `native` or a carried transcript) changes every record's key. Reconciling them MUST fail, since the union would hold the conversation twice. Copies forked before the first answer share no record either, but answer differently.
+- **Copies read differently.** Two copies (or a fork without `parent.entryId` and the input it links to) that share no record, yet give the same text for the first assistant message with text on their active paths, hold one conversation read in two ways: a conversion that kept less than the source (without `native` or a carried transcript) changes every record's key. Reconciling them MUST fail, since the union would hold the conversation twice. Copies forked before the first answer share no record either, but answer differently.
 
 Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `@leostera/atxf/reconcile` implements this; `specs/reconcile.ts` models it.
 

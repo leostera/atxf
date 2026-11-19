@@ -107,6 +107,7 @@ done
 
 compare "reconcile examples" reconcile examples/minimal.atxf.jsonl examples/minimal.atxf.jsonl
 compare "reconcile sealed" reconcile examples/sealed.atxf.jsonl examples/sealed.atxf.jsonl
+compare "reconcile a subagent into its parent" reconcile examples/subagent-child.atxf.jsonl examples/revert-and-subagent.atxf.jsonl
 # A copy converted without carry holds the same conversation under other keys: both refuse it.
 "${ts[@]}" convert --from pi --to atxf fixtures/pi/session-every-field.jsonl >"$work/local.atxf.jsonl"
 "${ts[@]}" convert --from pi --to codex --no-carry fixtures/pi/session-every-field.jsonl >"$work/lossy.jsonl"

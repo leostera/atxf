@@ -22,15 +22,22 @@ use crate::tree::{active_path, index_tree};
 
 const DOMAIN: &str = "atxf/0.1/reconcile\n";
 
-/// Two copies that hold the same conversation read in different ways: they share no record, yet the model's first
+/// Two inputs that hold the same conversation read in different ways: they share no record, yet the model's first
 /// answer on the active path is the same in both. A lossy conversion (one without carry) changes every record's key,
 /// so their union would hold the conversation twice. Copies forked before the first answer each have their own.
-fn read_twice(copies: &[Transcript], keyed: &[Vec<Keyed<'_>>]) -> Option<(usize, usize)> {
+///
+/// Only inputs that should share records are compared: copies of one transcript, and a fork with the transcript it
+/// links to.
+fn read_twice(copies: &[Transcript], keyed: &[Vec<Keyed<'_>>], targets: &HashMap<usize, Vec<usize>>) -> Option<(usize, usize)> {
     let keys: Vec<HashSet<&str>> = keyed.iter().map(|records| records.iter().map(|k| k.key.as_str()).collect()).collect();
     let answers: Vec<Option<String>> = copies.iter().map(first_answer).collect();
+    let forks_of = |child: usize, of: usize| {
+        targets.get(&child).is_some_and(|t| t.contains(&of)) && copies[child].header.obj("parent").and_then(|p| p.str("entryId")).is_none()
+    };
+    let should_share = |a: usize, b: usize| copies[a].id() == copies[b].id() || forks_of(b, a) || forks_of(a, b);
     for a in 0..copies.len() {
         for b in (a + 1)..copies.len() {
-            if answers[a].is_some() && answers[a] == answers[b] && keys[a].is_disjoint(&keys[b]) {
+            if should_share(a, b) && answers[a].is_some() && answers[a] == answers[b] && keys[a].is_disjoint(&keys[b]) {
                 return Some((a, b));
             }
         }
@@ -86,7 +93,7 @@ struct Keyed<'a> {
 
 /// The reconciliation key of every record of a copy, except seals: a digest of the record's content without its
 /// id, its hash or the ids it references, and of the keys of the records it references.
-fn key_copy(copy: &Transcript) -> Result<Vec<Keyed<'_>>, Error> {
+fn key_copy<'a>(copy: &'a Transcript, graft: Option<&Graft>) -> Result<(Vec<Keyed<'a>>, HashMap<&'a str, Hash>), Error> {
     let mut key_of: HashMap<&str, Hash> = HashMap::new();
     let mut out = Vec::new();
     for (index, record) in copy.records.iter().enumerate() {
@@ -132,22 +139,50 @@ fn key_copy(copy: &Transcript) -> Result<Vec<Keyed<'_>>, Error> {
         if !record.has("id") {
             content.push(("id", Field::Blank));
         }
-        let mut ref_map = Map::new();
-        for (field, key) in &refs {
-            ref_map.insert(field.clone(), key.clone().map_or(Value::Null, Value::String));
+        let mut key = digest(&content, &refs);
+        // A root the linked transcript does not share hangs under its graft point, keyed as it stands in the result.
+        if let Some(graft) = graft
+            && refs.iter().any(|(field, key)| field == "parentId" && key.is_none())
+            && !graft.shared.contains(&key)
+        {
+            for (field, value) in content.iter_mut() {
+                if *field == "parentId" {
+                    *value = Field::Blank;
+                }
+            }
+            for (field, value) in refs.iter_mut() {
+                if field == "parentId" {
+                    *value = Some(graft.key.clone());
+                }
+            }
+            key = digest(&content, &refs);
         }
-        // The canonical JSON of `{content, refs}`: its keys are already in order.
-        let mut text = String::from(DOMAIN);
-        text.push_str("{\"content\":");
-        write_fields(&mut text, content);
-        text.push_str(",\"refs\":");
-        write_canonical(&mut text, &Value::Object(ref_map));
-        text.push('}');
-        let key = format!("sha256:{}", sha256_hex(text.as_bytes()));
         key_of.insert(record.id(), key.clone());
         out.push(Keyed { key, record, refs, time: time::parse(record.time()).unwrap_or(f64::NEG_INFINITY) });
     }
-    Ok(out)
+    Ok((out, key_of))
+}
+
+/// The key of a record's content and the keys it references: the digest of the canonical JSON of `{content, refs}`.
+fn digest(content: &[(&str, Field<'_>)], refs: &[(String, Option<Hash>)]) -> Hash {
+    let mut ref_map = Map::new();
+    for (field, key) in refs {
+        ref_map.insert(field.clone(), key.clone().map_or(Value::Null, Value::String));
+    }
+    let mut text = String::from(DOMAIN);
+    text.push_str("{\"content\":");
+    write_fields(&mut text, content);
+    text.push_str(",\"refs\":");
+    write_canonical(&mut text, &Value::Object(ref_map));
+    text.push('}');
+    format!("sha256:{}", sha256_hex(text.as_bytes()))
+}
+
+/// Where a linked transcript's new roots go: the key of the record they hang under, and the keys of the records it
+/// links to, among which a root is shared and stays a root.
+struct Graft {
+    key: Hash,
+    shared: HashSet<Hash>,
 }
 
 /// A field of an object written as canonical JSON with some values replaced, without copying the object.
@@ -159,7 +194,8 @@ enum Field<'a> {
     ObjectBlanking(&'a Map, &'a str),
 }
 
-fn write_fields(out: &mut String, mut fields: Vec<(&str, Field<'_>)>) {
+fn write_fields(out: &mut String, fields: &[(&str, Field<'_>)]) {
+    let mut fields: Vec<&(&str, Field<'_>)> = fields.iter().collect();
     fields.sort_by(|(a, _), (b, _)| cmp_utf16(a, b));
     out.push('{');
     for (i, (key, field)) in fields.into_iter().enumerate() {
@@ -172,7 +208,9 @@ fn write_fields(out: &mut String, mut fields: Vec<(&str, Field<'_>)>) {
             Field::Value(value) => write_canonical(out, value),
             Field::Blank => out.push_str("\"\""),
             Field::ObjectBlanking(map, blank) => {
-                write_fields(out, map.iter().map(|(k, v)| (k.as_str(), if k == blank { Field::Blank } else { Field::Value(v) })).collect())
+                let inner: Vec<(&str, Field<'_>)> =
+                    map.iter().map(|(k, v)| (k.as_str(), if k == blank { Field::Blank } else { Field::Value(v) })).collect();
+                write_fields(out, &inner)
             }
         }
     }
@@ -181,7 +219,7 @@ fn write_fields(out: &mut String, mut fields: Vec<(&str, Field<'_>)>) {
 
 /// The reconciliation keys of a transcript's records. Two copies are in sync when their sets of keys are equal.
 pub fn reconciliation_keys(transcript: &Transcript) -> Result<HashSet<Hash>, Error> {
-    Ok(key_copy(transcript)?.into_iter().map(|k| k.key).collect())
+    Ok(key_copy(transcript, None)?.0.into_iter().map(|k| k.key).collect())
 }
 
 /// Whether two copies hold the same records, whatever their ids, order, hashes or seals.
@@ -192,12 +230,10 @@ pub fn in_sync(a: &Transcript, b: &Transcript) -> Result<bool, Error> {
 /// Reconcile copies of one session into one transcript that keeps every record of every copy. The result is hashed
 /// and sealed when `integrity` says so, or by default when any copy declares integrity.
 pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<ReconcileResult, Error> {
-    let first = copies.first().ok_or_else(|| Error::new("reconcile needs at least one copy"))?;
-    for copy in copies {
-        if copy.id() != first.id() {
-            return Err(Error::new(format!("copies of different sessions: `{}` and `{}`", first.id(), copy.id())));
-        }
+    if copies.is_empty() {
+        return Err(Error::new("reconcile needs at least one copy"));
     }
+    let Arranged { session_id, roots, order, targets } = arrange(copies)?;
     let problems = copies
         .iter()
         .enumerate()
@@ -206,13 +242,22 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
         .filter(|(_, p)| !p.is_empty())
         .collect();
 
-    let keyed = copies.iter().map(key_copy).collect::<Result<Vec<_>, _>>()?;
-    if let Some((a, b)) = read_twice(copies, &keyed) {
+    // Each transcript is keyed after the ones it links to, so its graft point has a key.
+    let mut keyed: Vec<Option<Vec<Keyed<'_>>>> = (0..copies.len()).map(|_| None).collect();
+    let mut key_of: Vec<Option<HashMap<&str, Hash>>> = (0..copies.len()).map(|_| None).collect();
+    for &index in &order {
+        let graft = graft_for(&copies[index], targets.get(&index).map(Vec::as_slice).unwrap_or_default(), &keyed, &key_of);
+        let (records, keys) = key_copy(&copies[index], graft.as_ref())?;
+        keyed[index] = Some(records);
+        key_of[index] = Some(keys);
+    }
+    let keyed: Vec<Vec<Keyed<'_>>> = keyed.into_iter().map(Option::unwrap_or_default).collect();
+    if let Some((a, b)) = read_twice(copies, &keyed, &targets) {
         return Err(Error::new(format!(
             "copies {} and {} of `{}` hold the same conversation but share no record: one was read differently (converted without carry?), and reconciling them would hold it twice",
             a + 1,
             b + 1,
-            first.id()
+            session_id
         )));
     }
 
@@ -233,7 +278,16 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
     let ordered = topological_order(by_key.into_values().collect());
     let (ids, renamed) = assign_ids(&ordered);
     let records = ordered.iter().map(|k| rewrite(k, &ids)).collect();
-    let transcript = Transcript { header: pick_header(copies), records };
+    let root_copies: Vec<Transcript> = roots.iter().map(|&i| copies[i].clone()).collect();
+    let mut header = pick_header(&root_copies);
+    let mut merged: Vec<&str> = copies.iter().flat_map(known).filter(|id| *id != session_id).collect();
+    merged.sort_by(|a, b| cmp_utf16(a, b));
+    merged.dedup();
+    header.shift_remove("merged");
+    if !merged.is_empty() {
+        header.insert("merged".into(), Value::Array(merged.into_iter().map(|id| Value::String(id.to_string())).collect()));
+    }
+    let transcript = Transcript { header, records };
     let integrity = integrity.unwrap_or_else(|| copies.iter().any(|c| c.header.has("integrity")));
     if !integrity {
         return Ok(ReconcileResult { transcript, renamed, problems });
@@ -244,6 +298,90 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
     let seal_id = format!("seal~{}", &sha256(&keys.join("\n"))[..12]);
     let sealed = add_integrity_owned(transcript, Some(SealAt { id: &seal_id, time: &last }))?;
     Ok(ReconcileResult { transcript: sealed, renamed, problems })
+}
+
+/// The ids a transcript stands for: its own, and those reconciled into it.
+fn known(copy: &Transcript) -> Vec<&str> {
+    let mut ids = vec![copy.id()];
+    if let Some(merged) = copy.header.arr("merged") {
+        ids.extend(merged.iter().filter_map(Value::as_str));
+    }
+    ids
+}
+
+struct Arranged {
+    session_id: String,
+    roots: Vec<usize>,
+    order: Vec<usize>,
+    targets: HashMap<usize, Vec<usize>>,
+}
+
+/// Which inputs are copies of the session and which link to it, as `arrange` in `reconcile.ts`.
+fn arrange(copies: &[Transcript]) -> Result<Arranged, Error> {
+    let mut targets: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (index, copy) in copies.iter().enumerate() {
+        let Some(parent) = copy.header.obj("parent").and_then(|p| p.str("transcriptId")) else { continue };
+        let to: Vec<usize> = copies
+            .iter()
+            .enumerate()
+            .filter(|(at, other)| *at != index && other.id() != copy.id() && known(other).contains(&parent))
+            .map(|(at, _)| at)
+            .collect();
+        if !to.is_empty() {
+            targets.insert(index, to);
+        }
+    }
+    let roots: Vec<usize> = (0..copies.len()).filter(|i| !targets.contains_key(i)).collect();
+    let Some(&first) = roots.first() else {
+        return Err(Error::new("reconcile needs a session the others link to, and every input links to another"));
+    };
+    let session_id = copies[first].id().to_string();
+    for &index in &roots {
+        if copies[index].id() != session_id {
+            return Err(Error::new(format!("copies of different sessions: `{}` and `{}`", session_id, copies[index].id())));
+        }
+    }
+    let mut order = roots.clone();
+    let mut placed: HashSet<usize> = roots.iter().copied().collect();
+    // In input order, as the TypeScript `Map` iterates.
+    let mut linked: Vec<usize> = targets.keys().copied().collect();
+    linked.sort_unstable();
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &index in &linked {
+            if placed.contains(&index)
+                || !targets[&index].iter().all(|at| placed.contains(at) || targets.get(at).is_some_and(|t| t.contains(&index)))
+            {
+                continue;
+            }
+            order.push(index);
+            placed.insert(index);
+            grew = true;
+        }
+    }
+    for &index in &linked {
+        if !placed.contains(&index) {
+            order.push(index);
+        }
+    }
+    Ok(Arranged { session_id, roots, order, targets })
+}
+
+/// Where a linked transcript's new roots go: the record `parent.entryId` names in the inputs it links to (the
+/// smallest key when they disagree).
+fn graft_for(
+    copy: &Transcript,
+    targets: &[usize],
+    keyed: &[Option<Vec<Keyed<'_>>>],
+    key_of: &[Option<HashMap<&str, Hash>>],
+) -> Option<Graft> {
+    let entry = copy.header.obj("parent").and_then(|p| p.str("entryId"))?;
+    let mut candidates: Vec<&Hash> = targets.iter().filter_map(|&at| key_of[at].as_ref().and_then(|keys| keys.get(entry))).collect();
+    candidates.sort_by(|a, b| cmp_utf16(a, b));
+    let key = (*candidates.first()?).clone();
+    let shared = targets.iter().flat_map(|&at| keyed[at].iter().flatten().map(|k| k.key.clone())).collect();
+    Some(Graft { key, shared })
 }
 
 /// Orders the heap so the earliest, then smallest key, pops first.

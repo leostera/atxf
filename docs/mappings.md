@@ -8,7 +8,7 @@ ATXF's tree and context semantics follow Pi, so this mapping is the closest to o
 
 | Pi | ATXF |
 | --- | --- |
-| `session` header | `transcript`. A `parentSession` becomes a `parent` with `relation: fork` |
+| `session` header | `transcript`. A `parentSession` (the parent's file path) becomes a `parent` with `relation: fork`, `uri` the path and `transcriptId` the session id in its file name (`<time>_<id>.jsonl`), or the path itself |
 | `message`, role `user` / `assistant` / `toolResult` | `message`, role `user` / `assistant` / `tool`. A message `timestamp` that differs from the entry's becomes `startTime` |
 | assistant `durationMs`, `responseModel`, `thinkingLevel`, `providerThinkingLevel` | `durationMs`, `responseModel`, `reasoningEffort`, `providerReasoningEffort` |
 | tool result `durationMs`, `nestedCalls` | `durationMs`, `nestedCalls` |

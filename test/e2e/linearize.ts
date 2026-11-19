@@ -11,7 +11,8 @@
 // codeword turn the model first runs a shell command with the agent's own tool, so every copy holds a tool call.
 //
 // `ATXF_E2E_PI_MODEL=provider/model` has Pi answer as C with a real model, which must name both codewords.
-// `ATXF_E2E_KEEP=1` keeps every agent's files. Arguments pick scenarios: an agent (`codex`), or `a,b,c`.
+// `ATXF_E2E_KEEP=1` keeps every agent's files. Arguments pick scenarios: an agent (`codex`), `a,b,c`, or `fan-out`
+// (Pi forks 10 subagents, and `atxf linearize` merges them back).
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -359,6 +360,52 @@ async function scenario(a: Agent, b: Agent, c: Agent) {
   }
 }
 
+/**
+ * Fan out and back: a Pi session forks `count` subagents (`pi --fork`), each suggesting its own name, and
+ * `atxf linearize --from pi --to pi` merges the session and every fork into one session file, which Pi continues.
+ */
+async function fanOut(count: number) {
+  const label = `pi forks ${count} subagents → pi`;
+  console.log(`\n# ${label}`);
+  const dir = join(root, `fan-out-${count}`);
+  // Ordinary words: a real model asked to repeat "codewords" from subagents may take them for secrets.
+  const words = ["AMBER", "BIRCH", "CEDAR", "DAHLIA", "EMBER", "FALCON", "GRANITE", "HARBOR", "IVORY", "JUNIPER", "KESTREL", "LANTERN"].slice(0, count);
+  try {
+    const main = await piAgent.start(join(dir, "main"), "We are naming a release. Each helper will suggest one name. Reply with one short line.");
+    const forks: string[] = [];
+    for (const [k, word] of words.entries()) {
+      const sessions = join(dir, `fork-${k}`, "sessions");
+      const home = join(dir, `fork-${k}`);
+      mkdirSync(join(home, "agent"), { recursive: true });
+      writeFileSync(join(home, "agent", "models.json"), readFileSync(join(dir, "main", "agent", "models.json")));
+      await run(["pi", "-p", "--offline", "-ne", "--no-mcp", "-ns", "-np", "-nc", "--no-themes", "--model", "mock/mock-1", "--fork", main.file, "--session-dir", sessions, `Helper ${k + 1} suggests the name ${word}. Reply with one short line.`], {
+        env: { PI_CODING_AGENT_DIR: join(home, "agent") },
+      });
+      forks.push(newest(filesUnder(sessions, ".jsonl")));
+    }
+    const cli = join(import.meta.dir, "../../packages/atxf-ts/src/cli.ts");
+    const merged = await run(["bun", cli, "linearize", "--from", "pi", "--to", "pi", main.file, ...forks]);
+    const sessionC = await piAgent.install(join(dir, "c"), merged);
+    const linear = formats.pi.toAtxf(merged);
+    check(leaves(indexTree(linear)).length === 1, "the merged session is one path");
+    const before = requests.length;
+    await piAgent.turn(join(dir, "c"), sessionC, `List the ${count} suggested names, in capitals, separated by commas.`);
+    if (process.env.ATXF_E2E_PI_MODEL) {
+      const answer = (answers.at(-1) ?? "").toUpperCase();
+      const found = words.filter((word) => answer.includes(word));
+      check(found.length === count, `a real model names all ${count} suggestions (${found.length})`, answer.slice(0, 200));
+      return;
+    }
+    const sent = requests.slice(before).find((r) => r.text.includes(`List the ${count} suggested names`))?.text ?? "";
+    const found = words.filter((word) => sent.includes(word));
+    check(found.length === count, `pi sent all ${count} subagents' suggestions to the model (${found.length})`);
+    check(sent.split("We are naming a release").length - 1 === 1, "and the session they forked from once");
+    check(words.every((word) => sent.split(word).length - 1 === 1), "each subagent's suggestion once");
+  } catch (error) {
+    check(false, label, (error as Error).message.slice(0, 1500));
+  }
+}
+
 function contextText(transcript: Transcript): string {
   return buildContext(transcript).messages.map((m) => (typeof m.body.content === "string" ? m.body.content : contentText(m.body.content as never))).join("\n");
 }
@@ -380,6 +427,7 @@ try {
     if (wanted.length && !wanted.some((w) => names.join(",") === w || names.every((n) => n === w))) continue;
     await scenario(a, b, c);
   }
+  if (wanted.length === 0 || wanted.includes("fan-out")) await fanOut(10);
 } finally {
   model.stop(true);
   if (!process.env.ATXF_E2E_KEEP) rmSync(root, { recursive: true, force: true });
