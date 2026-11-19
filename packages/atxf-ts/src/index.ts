@@ -13,3 +13,4 @@ export * from "./decode-helpers.ts";
 export * from "./version.ts";
 export * from "./patch.ts";
 export * from "./fidelity.ts";
+export * from "./linearize.ts";

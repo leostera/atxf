@@ -1,9 +1,9 @@
-//! `atxf`: validate, convert and reconcile transcripts. The same commands as the TypeScript CLI.
+//! `atxf`: validate, convert, reconcile and linearize transcripts. The same commands as the TypeScript CLI.
 
 use std::io::Write;
 use std::process::ExitCode;
 
-use atxf::{Transcript, formats, parse_transcript, reconcile, serialize_transcript, validate_transcript};
+use atxf::{Transcript, formats, linearize, parse_transcript, reconcile, serialize_transcript, validate_transcript};
 
 fn usage() -> ExitCode {
     let agents: Vec<&str> = formats::all().iter().map(|f| f.agent()).collect();
@@ -12,6 +12,8 @@ fn usage() -> ExitCode {
   atxf validate <file.atxf.jsonl>...
   atxf convert --from <agent|atxf> --to <agent|atxf> [--no-carry [--tree]] <file>      writes to stdout
   atxf reconcile <copy.atxf.jsonl>...                                           writes to stdout
+  atxf linearize [--from <agent|atxf>] [--to <agent|atxf>] <copy>...           every branch on one path, to stdout
+      several copies of a session are reconciled first; --to an agent writes its session file
   atxf stream --from <agent> [--no-integrity] [--lines <first>:<last>] [--resume <state.json>] [--state <state.json>] <file>
       pushes the file's lines (1-based, inclusive) one at a time; writes each record, then the header, to stdout
 
@@ -31,6 +33,7 @@ fn main() -> ExitCode {
         "validate" => validate(&args),
         "convert" => convert(args),
         "reconcile" => reconcile_command(&args),
+        "linearize" => linearize_command(args),
         "stream" => stream_command(args),
         _ => return usage(),
     };
@@ -174,4 +177,52 @@ fn reconcile_command(files: &[String]) -> Result<ExitCode, String> {
     }
     write_stdout(&serialize_transcript(&result.transcript))?;
     Ok(if result.problems.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+fn linearize_command(mut args: Vec<String>) -> Result<ExitCode, String> {
+    let mut option = |name: &str| {
+        let at = args.iter().position(|a| a == name)?;
+        let taken: Vec<String> = args.drain(at..(at + 2).min(args.len())).collect();
+        taken.into_iter().nth(1)
+    };
+    let from = option("--from").unwrap_or_else(|| "atxf".into());
+    let to = option("--to").unwrap_or_else(|| "atxf".into());
+    let known = |name: &str| name == "atxf" || formats::by_agent(name).is_some();
+    if !known(&from) || !known(&to) || args.is_empty() {
+        return Ok(usage());
+    }
+    let mut copies = Vec::with_capacity(args.len());
+    for file in &args {
+        let text = read(file)?;
+        let copy = match formats::by_agent(&from) {
+            Some(format) => format.to_atxf(&text, true),
+            None => parse_transcript(&text),
+        };
+        copies.push(copy.map_err(|e| format!("{file}: {e}"))?);
+    }
+    let source = if copies.len() > 1 {
+        let result = reconcile(&copies, None).map_err(|e| e.to_string())?;
+        for (copy, found) in &result.problems {
+            for p in found {
+                eprintln!("{}: record {}: {}", args[*copy], p.index.map_or(0, |i| i + 1), p.message);
+            }
+        }
+        if !result.problems.is_empty() {
+            return Ok(ExitCode::FAILURE);
+        }
+        result.transcript
+    } else {
+        copies.remove(0)
+    };
+    let result = linearize(&source).map_err(|e| e.to_string())?;
+    eprintln!("linearized {} branch(es) into one", result.branches);
+    let out = match formats::by_agent(&to) {
+        Some(format) => match format.from_atxf_tree(&result.transcript) {
+            Some(text) => text,
+            None => format.from_atxf(&result.transcript, false).map_err(|e| e.to_string())?,
+        },
+        None => serialize_transcript(&result.transcript),
+    };
+    write_stdout(&out)?;
+    Ok(ExitCode::SUCCESS)
 }

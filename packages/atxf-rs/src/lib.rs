@@ -8,6 +8,7 @@
 //! - [`integrity`]: Merkle hashes, seals and inclusion proofs.
 //! - [`formats`]: lossless converters for Pi, Claude Code, Codex, OpenCode and Gemini CLI.
 //! - [`reconcile`]: merging diverged copies of one session.
+//! - [`linearize`]: every branch of a transcript on one path.
 
 pub mod canonical;
 pub mod codec;
@@ -16,6 +17,7 @@ pub mod equivalence;
 pub mod formats;
 pub mod integrity;
 pub mod json;
+pub mod linearize;
 pub mod native;
 pub mod patch;
 pub mod reconcile;
@@ -32,6 +34,7 @@ pub const ATXF_VERSION: &str = "0.1";
 pub const ATXF_VERSIONS: &[&str] = &[ATXF_VERSION];
 
 pub use codec::Converter;
+pub use linearize::{LinearizeResult, linearize};
 pub use reconcile::{ReconcileResult, reconcile};
 pub use transcript::{Error, Transcript, parse_transcript, serialize_transcript};
 pub use validate::{Diagnostic, Severity, ValidationResult, validate_transcript};

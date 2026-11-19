@@ -108,5 +108,13 @@ done
 compare "reconcile examples" reconcile examples/minimal.atxf.jsonl examples/minimal.atxf.jsonl
 compare "reconcile sealed" reconcile examples/sealed.atxf.jsonl examples/sealed.atxf.jsonl
 
+for example in examples/*.atxf.jsonl; do compare "linearize $example" linearize "$example"; done
+compare "linearize reconciled copies" linearize examples/branching.atxf.jsonl examples/branching.atxf.jsonl
+for input in "${inputs[@]}"; do
+  from=${input%%:*}
+  [[ $from == atxf ]] && continue
+  for to in atxf "${agents[@]}"; do compare "linearize $from→$to ${input#*:}" linearize --from "$from" --to "$to" "${input#*:}"; done
+done
+
 echo "$checks checks, $failures differences"
 [[ $failures == 0 ]]

@@ -9,6 +9,7 @@ import fc from "fast-check";
 import { parseTranscript, serializeTranscript } from "../packages/atxf-ts/src/jsonl.ts";
 import { formats } from "../packages/atxf-ts/src/formats/index.ts";
 import { reconcile } from "../packages/atxf-ts/src/reconcile.ts";
+import { linearize } from "../packages/atxf-ts/src/linearize.ts";
 import { arbitraryTranscript, noisyJsonDocument, noisyJsonl } from "../packages/atxf-ts/src/testing.ts";
 import { validateTranscript } from "../packages/atxf-ts/src/validate.ts";
 
@@ -101,6 +102,18 @@ fc.assert(
     writeFileSync(fileA, serializeTranscript(a));
     const actual = rs(["reconcile", fileA], serializeTranscript(b), "b.atxf.jsonl").out;
     same("reconcile", expected, actual, `${serializeTranscript(a)}\n---\n${serializeTranscript(b)}`);
+    return true;
+  }),
+  { numRuns: runs },
+);
+
+// Linearizing generated transcripts, which branch, and writing them out for every agent.
+fc.assert(
+  fc.property(arbitraryTranscript(), fc.constantFrom("atxf", ...agents), (transcript, to) => {
+    const text = serializeTranscript(transcript);
+    const linear = linearize(transcript).transcript;
+    const expected = to === "atxf" ? serializeTranscript(linear) : formats[to].fromAtxf(linear, { carry: false, tree: true });
+    same(`linearize --to ${to}`, expected, rs(["linearize", "--to", to], text).out, text);
     return true;
   }),
   { numRuns: runs },

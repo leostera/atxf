@@ -5,16 +5,19 @@ All notable changes to `@leostera/atxf`. Versions are the package's own; every r
 
 ## Unreleased
 
-- **`mergeBranches`** (`@leostera/atxf/reconcile`): brings every other branch into the active one's context, as a
-  `branch_summary` per branch tip appended to the active leaf, so an agent continuing a reconciled session knows
-  what every copy did. Merging again adds nothing. `renderBranch` is the default summary; pass `summarize` for
-  your own (e.g. a model call).
+- **`linearize`** and **`atxf linearize`** (SPEC §18.1): every branch of a transcript on one path, turn by turn in
+  the order they happened, so an agent continuing a reconciled session sees what every copy did, word for word. The
+  result is a new transcript forked from the source (`fidelity.topology: "linearized"`). `atxf linearize` reconciles
+  several copies first, and with `--from`/`--to` it reads and writes an agent's own files:
+  `atxf linearize --from pi --to pi a.jsonl b.jsonl`. It works on all 2,614 local Pi sessions. In those that branch
+  and never compacted, every message is in context afterwards (151 instead of 17 in one). Also in the Rust crate and
+  CLI.
 - **Fix (Pi):** an entry Pi appended after a carried annotation (a seal or leaf written as an `atxf.record` custom
   entry, e.g. in a reconciled tree) read as a new root. It now continues from where the annotation sits, as after
   Pi's own labels. Reading changed, so `PI_STREAM_STATE` is now `pi/session-jsonl stream 2`: states saved by 0.4.0
   are refused, and the reader starts over.
-- **Test:** `test/pi-merge.test.ts`. Two Pis continue one session apart, the copies are reconciled and merged in
-  ATXF, and a third Pi continues the merged file and remembers what both did. It runs against a scripted model, or a
+- **Test:** `test/pi-linearize.test.ts`. Two Pis continue one session apart, the copies are reconciled and
+  linearized in ATXF, and a third Pi continues the linear file and remembers what both did. It runs against a scripted model, or a
   real one with `ATXF_E2E_MODEL`. It is skipped without `pi`.
 
 ## 0.4.0

@@ -1,11 +1,11 @@
-// Two Pis continue one session apart; a third continues the merge and remembers what both did.
+// Two Pis continue one session apart; a third continues their linearized union and remembers what both did.
 //
 // Needs `pi` on PATH, and is skipped without it. Each Pi runs once per prompt (`pi -p`) in its own session
 // directory, against a scripted OpenAI-compatible model that records every request, so what a Pi remembers is what
 // it sends the model. Pi A starts the session and the file is copied to Pi B, as when a session moves to a second
 // machine. Each is then told a different codeword. Both copies are read into ATXF, reconciled into one transcript
-// (SPEC §18), merged so the active branch summarizes the other, and written back as one Pi session file, which Pi C
-// continues.
+// with a branch for each (SPEC §18), linearized so both branches are on one path, and written back as one Pi session
+// file, which Pi C continues.
 //
 // `ATXF_E2E_MODEL=provider/model` runs the three Pis against a real model, with your Pi agent directory and
 // extensions for its credentials, and checks that Pi C's answer names both codewords. `ATXF_E2E_KEEP=1` keeps the
@@ -16,11 +16,12 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { activePath, buildContext, indexTree, leaves, serializeTranscript, validateTranscript, type Transcript } from "../src/index.ts";
 import { pi } from "../src/formats/pi.ts";
-import { mergeBranches, reconcile } from "../src/reconcile.ts";
+import { linearize } from "../src/linearize.ts";
+import { reconcile } from "../src/reconcile.ts";
 
 const realModel = process.env.ATXF_E2E_MODEL;
 const havePi = Bun.which("pi") !== null;
-const root = mkdtempSync(join(tmpdir(), "atxf-pi-merge-"));
+const root = mkdtempSync(join(tmpdir(), "atxf-pi-linearize-"));
 if (!process.env.ATXF_E2E_KEEP) afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 type Message = { role: string; content: unknown };
@@ -72,13 +73,13 @@ async function piTurn(dir: string, message: string, session?: string): Promise<{
 const CODEWORDS = ["MARMALADE", "TANGERINE"];
 const textOf = (messages: Message[]) => JSON.stringify(messages);
 
-describe.skipIf(!havePi)("two Pis, merged in ATXF, continued by a third", () => {
-  let merged: Transcript;
+describe.skipIf(!havePi)("two Pis, reconciled and linearized in ATXF, continued by a third", () => {
+  let linear: Transcript;
   let reconciled: Transcript;
   let answer: string;
   let continued: string;
 
-  test("the copies diverge, reconcile into two branches and merge into one", async () => {
+  test("the copies diverge, reconcile into two branches and linearize into one path", async () => {
     const a = await piTurn(join(root, "a"), "We are naming a release. I will tell you codewords; remember each one. Reply with one short line.");
     const b = join(root, "b", basename(a.file));
     mkdirSync(join(root, "b"), { recursive: true });
@@ -94,20 +95,21 @@ describe.skipIf(!havePi)("two Pis, merged in ATXF, continued by a third", () => 
     const unmerged = JSON.stringify(buildContext(reconciled).messages);
     expect(CODEWORDS.filter((word) => unmerged.includes(word))).toHaveLength(1);
 
-    const result = mergeBranches(reconciled);
-    merged = result.transcript;
-    expect(result.merged).toHaveLength(1);
-    expect(validateTranscript(serializeTranscript(merged)).ok).toBe(true);
-    const context = JSON.stringify(buildContext(merged).messages);
+    const result = linearize(reconciled);
+    linear = result.transcript;
+    expect(result.branches).toBe(2);
+    expect(validateTranscript(serializeTranscript(linear)).ok).toBe(true);
+    expect(leaves(indexTree(linear))).toHaveLength(1);
+    const context = JSON.stringify(buildContext(linear).messages);
     for (const word of CODEWORDS) expect(context).toContain(word);
-    // Merging again adds nothing.
-    expect(mergeBranches(merged).merged).toHaveLength(0);
+    // Codeword one was told first, so it comes first.
+    expect(context.indexOf(CODEWORDS[0]!)).toBeLessThan(context.indexOf(CODEWORDS[1]!));
   }, 600_000);
 
-  test("a third Pi continues the merged session and remembers both codewords", async () => {
-    const c = join(root, "c", "merged.jsonl");
+  test("a third Pi continues the linearized session and remembers both codewords", async () => {
+    const c = join(root, "c", "linear.jsonl");
     mkdirSync(join(root, "c"), { recursive: true });
-    writeFileSync(c, pi.fromAtxf(merged, { carry: false, tree: true }));
+    writeFileSync(c, pi.fromAtxf(linear, { carry: false, tree: true }));
     const before = requests.length;
     ({ answer } = await piTurn(join(root, "c"), "What are the two codewords? Answer with just the two words.", c));
     continued = readFileSync(c, "utf8");
@@ -121,12 +123,13 @@ describe.skipIf(!havePi)("two Pis, merged in ATXF, continued by a third", () => 
     }
   }, 600_000);
 
-  test("the continued file still holds both branches, and the new turn follows the merge", () => {
+  test("the continued file is one path: every turn of both copies, then the new one", () => {
     const after = pi.toAtxf(continued);
+    expect(leaves(indexTree(after))).toHaveLength(1);
     const path = activePath(after);
-    expect(path.some((record) => record.type === "branch_summary")).toBe(true);
-    expect(leaves(indexTree(after))).toHaveLength(2);
-    // Every record of the reconciled copies is still there.
-    expect(after.records.length).toBeGreaterThan(reconciled.records.length);
+    const before = new Set(activePath(linear).map((record) => record.id));
+    expect(path.slice(0, before.size).every((record) => before.has(record.id))).toBe(true);
+    for (const record of reconciled.records) if (record.type === "message") expect(before.has(record.id)).toBe(true);
+    expect(path.length).toBeGreaterThan(before.size);
   }, 60_000);
 });

@@ -11,6 +11,7 @@ npx @leostera/atxf validate session.atxf.jsonl      # or bunx
 npx @leostera/atxf convert --from pi --to codex session.jsonl > rollout.jsonl
 npx @leostera/atxf convert --from codex --to atxf rollout.jsonl > session.atxf.jsonl
 npx @leostera/atxf reconcile studio.atxf.jsonl laptop.atxf.jsonl > merged.atxf.jsonl
+npx @leostera/atxf linearize merged.atxf.jsonl > linear.atxf.jsonl
 ```
 
 Agents: `pi`, `claude-code`, `codex`, `opencode`, `gemini-cli`. Converting a session to another agent's format and
@@ -30,18 +31,22 @@ const rollout = codex.fromAtxf(transcript); // Codex can continue it; reading it
 const context = buildContext(transcript); // what the model sees at the active leaf
 ```
 
-Reconciling keeps what each copy added as sibling branches, so the next turn sees only one of them. To continue
-with what every copy did, `mergeBranches` appends to the active branch a `branch_summary` of each other branch,
-which Pi and the other agents send to the model:
+Reconciling keeps what each copy added as a sibling branch, so the next turn sees only one of them. Linearizing
+puts every branch on one path, turn by turn in the order they happened (SPEC §18.1), so an agent continuing it
+knows what every copy did:
 
-```ts
-import { mergeBranches, reconcile } from "@leostera/atxf/reconcile";
-
-const { transcript } = mergeBranches(reconcile([pi.toAtxf(studio), pi.toAtxf(laptop)]).transcript);
-writeFileSync("merged.jsonl", pi.fromAtxf(transcript, { carry: false, tree: true })); // pi --session merged.jsonl
+```sh
+npx @leostera/atxf linearize --from pi --to pi studio.jsonl laptop.jsonl > merged.jsonl   # pi --session merged.jsonl
 ```
 
-`test/pi-merge.test.ts` does this with three real Pis (`ATXF_E2E_MODEL=provider/model` for a real model).
+```ts
+import { linearize } from "@leostera/atxf";
+
+const { transcript } = linearize(reconcile([pi.toAtxf(studio), pi.toAtxf(laptop)]).transcript);
+writeFileSync("merged.jsonl", pi.fromAtxf(transcript, { carry: false, tree: true }));
+```
+
+`test/pi-linearize.test.ts` does this with three real Pis (`ATXF_E2E_MODEL=provider/model` for a real model).
 
 A Pi session can also be read as Pi writes it, one line at a time, holding only the ids and hashes later lines
 refer to. Each record is final when returned, and the same as `toAtxf` gives for the whole file:

@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parseTranscript, serializeTranscript } from "./jsonl.ts";
 import { formats } from "./formats/index.ts";
 import { reconcile } from "./reconcile.ts";
+import { linearize } from "./linearize.ts";
 import { validateTranscript } from "./validate.ts";
 import { addFidelity, emptyFidelity, formatFidelity, isLossless } from "./fidelity.ts";
 import { readdir, stat } from "node:fs/promises";
@@ -13,13 +14,15 @@ const USAGE = `usage:
   atxf convert --from <agent|atxf> --to <agent|atxf> [--no-carry [--tree]] <file>   writes to stdout
   atxf fidelity --from <agent> [--json] <file|dir>...                            what survives without native
   atxf reconcile <copy.atxf.jsonl>...                                           writes to stdout
+  atxf linearize [--from <agent|atxf>] [--to <agent|atxf>] <copy>...           every branch on one path, to stdout
+      several copies of a session are reconciled first; --to an agent writes its session file
   atxf stream --from <agent> [--no-integrity] [--lines <first>:<last>] [--resume <state.json>] [--state <state.json>] <file>
       pushes the file's lines (1-based, inclusive) one at a time; writes each record, then the header, to stdout
 
 agents: ${Object.keys(formats).join(", ")}`;
 
 const [command, ...args] = process.argv.slice(2);
-const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand, fidelity: fidelityCommand, stream: streamCommand };
+const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand, linearize: linearizeCommand, fidelity: fidelityCommand, stream: streamCommand };
 const run = command === undefined ? undefined : commands[command];
 // Set the exit code rather than calling `process.exit`, which would cut off output still being written to a pipe.
 process.exitCode = run === undefined ? usage() : await run(args);
@@ -94,6 +97,30 @@ async function reconcileCommand(files: string[]): Promise<number> {
   for (const r of renamed) console.error(`renamed ${r.id} -> ${r.as}`);
   process.stdout.write(serializeTranscript(transcript));
   return problems.length ? 1 : 0;
+}
+
+async function linearizeCommand(args: string[]): Promise<number> {
+  const option = (name: string) => {
+    const at = args.indexOf(name);
+    return at === -1 ? undefined : args.splice(at, 2)[1];
+  };
+  const from = option("--from") ?? "atxf";
+  const to = option("--to") ?? "atxf";
+  const known = (name: string) => name === "atxf" || name in formats;
+  if (!known(from) || !known(to) || args.length === 0) return usage();
+  const read = (text: string) => (from === "atxf" ? parseTranscript(text) : formats[from]!.toAtxf(text));
+  const copies = await Promise.all(args.map(async (file) => read(await readFile(file, "utf8"))));
+  let source = copies[0]!;
+  if (copies.length > 1) {
+    const result = reconcile(copies);
+    for (const { copy, problems } of result.problems) for (const p of problems) console.error(`${args[copy]}: record ${p.index + 1}: ${p.message}`);
+    if (result.problems.length) return 1;
+    source = result.transcript;
+  }
+  const { transcript, branches } = linearize(source);
+  console.error(`linearized ${branches} branch(es) into one`);
+  process.stdout.write(to === "atxf" ? serializeTranscript(transcript) : formats[to]!.fromAtxf(transcript, { carry: false, tree: true }));
+  return 0;
 }
 
 async function fidelityCommand(args: string[]): Promise<number> {

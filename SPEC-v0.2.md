@@ -298,6 +298,17 @@ Copies of one session diverge when it is continued in two places. Reconciling co
 
 Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `@leostera/atxf/reconcile` implements this; `specs/reconcile.ts` models it.
 
+### 18.1 Linearization
+
+A reconciled transcript keeps each copy's turns as a sibling branch, and an agent continuing it sees only the branch its leaf is on (§5). Linearizing puts every branch on one path, so an agent continuing it sees what every copy did, word for word. The result is a new transcript:
+
+- **Turns.** A turn starts at a root, at a `user` message, and at each child of a record with several children. It runs down the only child until the next turn starts. A parent the transcript does not hold makes a record a root (§4).
+- **Order.** A turn is written once the turn it continues is written, and once every record it references is (`targetId`, `fromId`, `firstKeptId`, `restoreCheckpointId`). A turn that reaches a record whose references are not written yet stops there, and the rest waits. Among the turns ready, first come those that start mid-turn (another answer to the same prompt), then the earliest `time`, then the earliest in file order.
+- **Records.** Every tree record is written once, in that order, with `parentId` set to the record before it (`null` for the first). Records keep their `id` and content; `hash` and `native` are dropped, since the records no longer have the source's parents. Annotations follow, in file order, except `leaf` and `seal` records, which describe the source.
+- **Header.** `id` is a UUID (version 8) of the first 128 bits of the SHA-256 of `atxf/0.1/linearize\n`, the source's `id`, and the written records' ids, each on its own line. `parent` is `{transcriptId: <source id>, relation: "fork"}`, `fidelity.topology` is `linearized`, and `native`, `source.sessionId`, `fidelity.native` and `fidelity.nativeDigest` are dropped. The result is hashed (§17) when the source declares integrity.
+
+Linearizing a linear transcript keeps its order. Context is still built by §5: a compaction keeps its place on the path, and an edit applies to its target wherever that is now. `@leostera/atxf` implements this as `linearize`, and `atxf linearize` on the command line.
+
 ## 19. Privacy
 
 Transcripts routinely contain source code, credentials pasted by users, file paths and personal data. Producers SHOULD offer redaction before export. `native` and `replay` can contain the same sensitive material in less visible form.
