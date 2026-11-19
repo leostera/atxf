@@ -142,7 +142,7 @@ impl<'a> PiReader<'a> {
 
 /// The version of what a Pi stream's state holds and how reading goes on from it, the same as `PI_STREAM_STATE` in
 /// TypeScript. Bump it whenever Pi reading changes: a state from another version is refused.
-pub const PI_STREAM_STATE: &str = "pi/session-jsonl stream 1";
+pub const PI_STREAM_STATE: &str = "pi/session-jsonl stream 2";
 
 /// A Pi session read as Pi writes it, one line at a time, as `pi.stream()` reads it in TypeScript: each record is
 /// final when returned, and the stream keeps the ids and hashes later lines refer to, never the records. Its state
@@ -445,10 +445,14 @@ fn entry_record(unit: &Unit, index: usize, tree: &mut TreeBuilder<'_>, fallback_
             _ => custom(tree),
         },
         Some("custom") => {
-            tree.alias(native_id.as_ref(), Some(id.clone()));
             if let Some(carried) = carried_record(&e, &node) {
+                // A carried annotation (a seal, a leaf) is no tree node: an entry Pi parented on it continues from
+                // where it sits, as for Pi's own labels.
+                let stands_for = if carried.contains_key("parentId") { Some(id.clone()) } else { parent_id.clone() };
+                tree.alias(native_id.as_ref(), stands_for);
                 return carried;
             }
+            tree.alias(native_id.as_ref(), Some(id.clone()));
             node.record("custom")
                 .set("namespace", AGENT)
                 .set("name", e.nonempty("customType").unwrap_or("custom"))

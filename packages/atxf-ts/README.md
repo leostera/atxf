@@ -30,6 +30,19 @@ const rollout = codex.fromAtxf(transcript); // Codex can continue it; reading it
 const context = buildContext(transcript); // what the model sees at the active leaf
 ```
 
+Reconciling keeps what each copy added as sibling branches, so the next turn sees only one of them. To continue
+with what every copy did, `mergeBranches` appends to the active branch a `branch_summary` of each other branch,
+which Pi and the other agents send to the model:
+
+```ts
+import { mergeBranches, reconcile } from "@leostera/atxf/reconcile";
+
+const { transcript } = mergeBranches(reconcile([pi.toAtxf(studio), pi.toAtxf(laptop)]).transcript);
+writeFileSync("merged.jsonl", pi.fromAtxf(transcript, { carry: false, tree: true })); // pi --session merged.jsonl
+```
+
+`test/pi-merge.test.ts` does this with three real Pis (`ATXF_E2E_MODEL=provider/model` for a real model).
+
 A Pi session can also be read as Pi writes it, one line at a time, holding only the ids and hashes later lines
 refer to. Each record is final when returned, and the same as `toAtxf` gives for the whole file:
 

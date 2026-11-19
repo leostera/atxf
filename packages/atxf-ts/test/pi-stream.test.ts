@@ -97,4 +97,5 @@ describe("pi.stream", () => {
 /** What each stream state version reads from `fixtures/pi/session-every-field.jsonl`: the transcript's sha256. */
 const PINNED: Record<string, string> = {
   "pi/session-jsonl stream 1": "8e5d53686c07f62573c274519d1c26391e177aeef4966704fa61dab353a6aad0",
+  "pi/session-jsonl stream 2": "8e5d53686c07f62573c274519d1c26391e177aeef4966704fa61dab353a6aad0",
 };

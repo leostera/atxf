@@ -66,7 +66,7 @@ function decode(units: Unit[], context: DecodeContext): { header: TranscriptHead
  * changes, even in a record's field: a state from another version is refused (`test/pi-stream.test.ts` pins the
  * records this version reads from a fixture, to catch a change that forgets to).
  */
-export const PI_STREAM_STATE = "pi/session-jsonl stream 1";
+export const PI_STREAM_STATE = "pi/session-jsonl stream 2";
 
 /** What a Pi reader knows, as JSON: whether a context was read, the tree so far, and ids taken by no tree record. */
 interface PiStreamState {
@@ -287,8 +287,10 @@ function entryRecord(unit: Unit, index: number, tree: TreeBuilder, context: Deco
       return treeRecord(compact({ type: "branch_summary" as const, ...node, fromId, summary: e.summary, usage: usageOf(e.usage) }));
     }
     case "custom": {
-      tree.alias(e.id, id);
       const carried = carriedRecord(e, node);
+      // A carried annotation (a seal, a leaf) is no tree node: an entry Pi parented on it continues from where it
+      // sits, as for Pi's own labels.
+      tree.alias(e.id, carried && !("parentId" in carried) ? parentId : id);
       if (carried) return carried;
       return compact({
         type: "custom" as const,

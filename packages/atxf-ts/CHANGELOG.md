@@ -3,6 +3,20 @@
 All notable changes to `@leostera/atxf`. Versions are the package's own; every release so far implements ATXF 0.1
 (`ATXF_VERSIONS`).
 
+## Unreleased
+
+- **`mergeBranches`** (`@leostera/atxf/reconcile`): brings every other branch into the active one's context, as a
+  `branch_summary` per branch tip appended to the active leaf, so an agent continuing a reconciled session knows
+  what every copy did. Merging again adds nothing. `renderBranch` is the default summary; pass `summarize` for
+  your own (e.g. a model call).
+- **Fix (Pi):** an entry Pi appended after a carried annotation (a seal or leaf written as an `atxf.record` custom
+  entry, e.g. in a reconciled tree) read as a new root. It now continues from where the annotation sits, as after
+  Pi's own labels. Reading changed, so `PI_STREAM_STATE` is now `pi/session-jsonl stream 2`: states saved by 0.4.0
+  are refused, and the reader starts over.
+- **Test:** `test/pi-merge.test.ts`. Two Pis continue one session apart, the copies are reconciled and merged in
+  ATXF, and a third Pi continues the merged file and remembers what both did. It runs against a scripted model, or a
+  real one with `ATXF_E2E_MODEL`. It is skipped without `pi`.
+
 ## 0.4.0
 
 - **Pi without native.** A Pi session read, stripped of `native` and written back loses nothing: every entry comes

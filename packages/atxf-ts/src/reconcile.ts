@@ -2,14 +2,18 @@ import {
   REFERENCE_FIELDS,
   addIntegrity,
   canonicalJson,
+  contentText,
   sha256,
   verifyIntegrity,
   type EntryRecord,
   type Hash,
   type IntegrityProblem,
+  type BranchSummaryRecord,
   type Transcript,
   type TranscriptHeader,
+  type TreeRecord,
 } from "./index.ts";
+import { indexTree, leaves, pathTo } from "./tree.ts";
 
 /**
  * Reconciling copies of one session (SPEC.md, Reconciliation; specs/reconcile.ts).
@@ -271,4 +275,96 @@ class MinHeap<T> {
     }
     return top;
   }
+}
+
+export interface MergeBranchesOptions {
+  /**
+   * Writes the summary of one branch from the records it adds after the fork, oldest first. Default: a plain
+   * transcript of its messages ("user: …", "assistant: …", tool calls and results in brackets). Pass a model call
+   * for a shorter summary.
+   */
+  summarize?: (branch: readonly TreeRecord[]) => string;
+  /** The time of the summaries. Default: the latest time in the transcript, so merging is deterministic. */
+  time?: string;
+}
+
+export interface MergeBranchesResult {
+  transcript: Transcript;
+  /** The summaries appended, one per merged branch, in file order. */
+  merged: BranchSummaryRecord[];
+}
+
+/**
+ * Brings every other branch into the active one's model context.
+ *
+ * Reconciling copies keeps both suffixes as sibling branches, so the next turn sees only the branch its leaf is on.
+ * Merging appends to the active leaf one `branch_summary` per other branch tip (SPEC §4, as Pi's /tree does when it
+ * leaves a branch), so an agent continuing the session sees what every copy did. Tips a summary on the active path
+ * already names are skipped, so merging again changes nothing.
+ */
+export function mergeBranches(transcript: Transcript, options: MergeBranchesOptions = {}): MergeBranchesResult {
+  const summarize = options.summarize ?? renderBranch;
+  const index = indexTree(transcript);
+  const active = pathTo(index, index.activeLeaf);
+  const onPath = new Set(active.map((record) => record.id));
+  const done = new Set(active.flatMap((record) => (record.type === "branch_summary" ? [record.fromId] : [])));
+  const tips = leaves(index).filter((tip) => !onPath.has(tip) && !done.has(tip));
+  if (tips.length === 0) return { transcript, merged: [] };
+
+  const time = options.time ?? latestTime(transcript);
+  const taken = new Set(transcript.records.map((record) => record.id));
+  const merged: BranchSummaryRecord[] = [];
+  let parentId = index.activeLeaf;
+  for (const tip of tips) {
+    const branch = pathTo(index, tip).filter((record) => !onPath.has(record.id));
+    const id = freeId(`merge~${sha256(`${parentId}\n${tip}`)}`, taken);
+    const record: BranchSummaryRecord = { type: "branch_summary", id, parentId, time, fromId: tip, summary: summarize(branch) };
+    merged.push(record);
+    parentId = id;
+  }
+
+  const sealed = transcript.records.some((record) => record.type === "seal") || transcript.header.integrity !== undefined;
+  const records = [...transcript.records.filter((record) => record.type !== "seal"), ...merged].map((record) => withoutHash(record));
+  const result: Transcript = { header: transcript.header, records };
+  if (!sealed) return { transcript: result, merged };
+  const seal = { id: freeId(`seal~${sha256(merged.map((record) => record.id).join("\n")).slice(0, 12)}`, taken), time };
+  return { transcript: addIntegrity(result, { seal }), merged };
+}
+
+function freeId(candidate: string, taken: Set<string>): string {
+  for (let length = 14; ; length++) {
+    const id = candidate.slice(0, length);
+    if (!taken.has(id) || length >= candidate.length) {
+      taken.add(id);
+      return id;
+    }
+  }
+}
+
+function latestTime(transcript: Transcript): string {
+  let latest = transcript.header.time;
+  for (const record of transcript.records) if (timeOf(record.time) > timeOf(latest)) latest = record.time;
+  return latest;
+}
+
+/** A branch as plain text: one line per message, tool calls and results in brackets. */
+export function renderBranch(branch: readonly TreeRecord[]): string {
+  const lines: string[] = [];
+  for (const record of branch) {
+    if (record.type === "branch_summary") lines.push(`[summary of another branch] ${record.summary}`);
+    else if (record.type === "compaction") lines.push(`[summary of earlier turns] ${record.summary}`);
+    if (record.type !== "message") continue;
+    if (record.role === "tool") {
+      lines.push(`[result of ${record.toolName ?? "a tool"}] ${contentText(record.content)}`);
+      continue;
+    }
+    const parts = typeof record.content === "string" ? [record.content] : record.content.flatMap((block) => {
+      if (block.type === "text") return [block.text];
+      if (block.type === "tool_call") return [`[called ${block.name} ${JSON.stringify(block.arguments ?? {})}]`];
+      if (block.type === "image") return ["[image]"];
+      return [];
+    });
+    if (parts.length) lines.push(`${record.role}: ${parts.join("\n")}`);
+  }
+  return lines.join("\n");
 }
