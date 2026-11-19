@@ -1,5 +1,6 @@
 import {
   REFERENCE_FIELDS,
+  activePath,
   addIntegrity,
   canonicalJson,
   sha256,
@@ -74,9 +75,17 @@ export function reconcile(copies: readonly Transcript[], options: ReconcileOptio
     return found.length ? [{ copy: index, problems: found }] : [];
   });
 
+  const keyed = copies.map(keyCopy);
+  const twice = readTwice(copies, keyed);
+  if (twice !== undefined) {
+    throw new Error(
+      `copies ${twice[0] + 1} and ${twice[1] + 1} of \`${sessionId}\` hold the same conversation but share no record: one was read differently (converted without carry?), and reconciling them would hold it twice`,
+    );
+  }
+
   const byKey = new Map<Hash, Keyed>();
-  for (const copy of copies) {
-    for (const keyed of keyCopy(copy)) {
+  for (const records of keyed) {
+    for (const keyed of records) {
       // The same record may have different ids in different copies: an earlier reconciliation renamed it, or the
       // ids are positions. Keep the smallest, so the choice does not depend on the order of the copies; a record's
       // own id sorts before its renamed form `id~...`.
@@ -97,6 +106,34 @@ export function reconcile(copies: readonly Transcript[], options: ReconcileOptio
   const last = ordered.at(-1)?.record.time ?? transcript.header.time;
   const seal = { id: `seal~${sha256(keys.join("\n")).slice(0, 12)}`, time: last };
   return { transcript: addIntegrity(transcript, { seal }), renamed, problems };
+}
+
+/**
+ * Two copies that hold the same conversation read in different ways: they share no record, yet the model's first
+ * answer is the same in both. A lossy conversion (one without carry) changes every record's key, so their union
+ * would hold the conversation twice. Copies of a session forked before its first answer share no record either, but
+ * each has its own first answer. Answers are compared on the active path, which every conversion writes.
+ */
+function readTwice(copies: readonly Transcript[], keyed: readonly Keyed[][]): [number, number] | undefined {
+  const keys = keyed.map((records) => new Set(records.map((record) => record.key)));
+  const answers = copies.map(firstAnswer);
+  for (let a = 0; a < copies.length; a++) {
+    for (let b = a + 1; b < copies.length; b++) {
+      if (answers[a] === undefined || answers[a] !== answers[b]) continue;
+      if (![...keys[a]!].some((key) => keys[b]!.has(key))) return [a, b];
+    }
+  }
+  return undefined;
+}
+
+/** The text of the first assistant message with any on the active path: what a lossy conversion writes. */
+function firstAnswer(copy: Transcript): string | undefined {
+  for (const record of activePath(copy)) {
+    if (record.type !== "message" || record.role !== "assistant") continue;
+    const text = record.content.flatMap((block) => (block.type === "text" && block.text !== "" ? [block.text] : [])).join("\n");
+    if (text !== "") return text;
+  }
+  return undefined;
 }
 
 const DOMAIN = "atxf/0.1/reconcile\n";

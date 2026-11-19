@@ -107,6 +107,11 @@ done
 
 compare "reconcile examples" reconcile examples/minimal.atxf.jsonl examples/minimal.atxf.jsonl
 compare "reconcile sealed" reconcile examples/sealed.atxf.jsonl examples/sealed.atxf.jsonl
+# A copy converted without carry holds the same conversation under other keys: both refuse it.
+"${ts[@]}" convert --from pi --to atxf fixtures/pi/session-every-field.jsonl >"$work/local.atxf.jsonl"
+"${ts[@]}" convert --from pi --to codex --no-carry fixtures/pi/session-every-field.jsonl >"$work/lossy.jsonl"
+"${ts[@]}" convert --from codex --to atxf "$work/lossy.jsonl" >"$work/lossy.atxf.jsonl"
+compare "reconcile a copy read differently" reconcile "$work/local.atxf.jsonl" "$work/lossy.atxf.jsonl"
 
 for example in examples/*.atxf.jsonl; do compare "linearize $example" linearize "$example"; done
 compare "linearize reconciled copies" linearize examples/branching.atxf.jsonl examples/branching.atxf.jsonl

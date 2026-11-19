@@ -25,7 +25,11 @@ const [command, ...args] = process.argv.slice(2);
 const commands: Record<string, (args: string[]) => Promise<number>> = { validate, convert, reconcile: reconcileCommand, linearize: linearizeCommand, fidelity: fidelityCommand, stream: streamCommand };
 const run = command === undefined ? undefined : commands[command];
 // Set the exit code rather than calling `process.exit`, which would cut off output still being written to a pipe.
-process.exitCode = run === undefined ? usage() : await run(args);
+process.exitCode = run === undefined ? usage() : await run(args).catch((error: unknown) => {
+  // As the Rust CLI does: the message, not a stack trace.
+  console.error(`atxf: ${error instanceof Error ? error.message : String(error)}`);
+  return 1;
+});
 
 async function validate(files: string[]): Promise<number> {
   if (files.length === 0) return usage();

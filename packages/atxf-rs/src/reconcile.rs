@@ -18,8 +18,45 @@ use crate::integrity::{Hash, IntegrityProblem, REFERENCE_FIELDS, SealAt, add_int
 use crate::json::{Get, Map, Obj, Value, cmp_utf16, write_string};
 use crate::time;
 use crate::transcript::{Error, Record, Transcript};
+use crate::tree::{active_path, index_tree};
 
 const DOMAIN: &str = "atxf/0.1/reconcile\n";
+
+/// Two copies that hold the same conversation read in different ways: they share no record, yet the model's first
+/// answer on the active path is the same in both. A lossy conversion (one without carry) changes every record's key,
+/// so their union would hold the conversation twice. Copies forked before the first answer each have their own.
+fn read_twice(copies: &[Transcript], keyed: &[Vec<Keyed<'_>>]) -> Option<(usize, usize)> {
+    let keys: Vec<HashSet<&str>> = keyed.iter().map(|records| records.iter().map(|k| k.key.as_str()).collect()).collect();
+    let answers: Vec<Option<String>> = copies.iter().map(first_answer).collect();
+    for a in 0..copies.len() {
+        for b in (a + 1)..copies.len() {
+            if answers[a].is_some() && answers[a] == answers[b] && keys[a].is_disjoint(&keys[b]) {
+                return Some((a, b));
+            }
+        }
+    }
+    None
+}
+
+/// The text of the first assistant message with any on the active path: what a lossy conversion writes.
+fn first_answer(copy: &Transcript) -> Option<String> {
+    let index = index_tree(copy);
+    active_path(&index).into_iter().filter(|r| r.kind() == "message" && r.str("role") == Some("assistant")).find_map(|record| {
+        let parts: Vec<&str> = record
+            .arr("content")
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|b| b.as_object())
+                    .filter(|b| b.str("type") == Some("text"))
+                    .filter_map(|b| b.str("text"))
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        (!parts.is_empty()).then(|| parts.join("\n"))
+    })
+}
 
 /// A record that shares an id with a different record, and the id it has in the result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,9 +206,19 @@ pub fn reconcile(copies: &[Transcript], integrity: Option<bool>) -> Result<Recon
         .filter(|(_, p)| !p.is_empty())
         .collect();
 
+    let keyed = copies.iter().map(key_copy).collect::<Result<Vec<_>, _>>()?;
+    if let Some((a, b)) = read_twice(copies, &keyed) {
+        return Err(Error::new(format!(
+            "copies {} and {} of `{}` hold the same conversation but share no record: one was read differently (converted without carry?), and reconciling them would hold it twice",
+            a + 1,
+            b + 1,
+            first.id()
+        )));
+    }
+
     let mut by_key: HashMap<Hash, Keyed<'_>> = HashMap::new();
-    for copy in copies {
-        for keyed in key_copy(copy)? {
+    for records in keyed {
+        for keyed in records {
             // The same record may have different ids in different copies: an earlier reconciliation renamed it, or
             // the ids are positions. Keep the smallest, so the choice does not depend on the order of the copies.
             match by_key.get(&keyed.key) {

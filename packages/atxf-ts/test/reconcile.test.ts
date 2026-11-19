@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
+import { readFileSync } from "node:fs";
+import { codex } from "../src/formats/codex.ts";
+import { pi } from "../src/formats/pi.ts";
 import { indexTree, serializeTranscript, validateTranscript, verifyIntegrity, addIntegrity, type EntryRecord, type Transcript } from "../src/index.ts";
 import { arbitraryTranscript } from "../src/testing.ts";
 import { inSync, reconcile, reconciliationKeys } from "../src/reconcile.ts";
@@ -20,6 +23,9 @@ function strip(record: EntryRecord): EntryRecord {
  */
 function diverge(base: Transcript, cut: number, tag: string | null, sealed: boolean): Transcript {
   const records = base.records.filter((record) => record.type !== "seal").map(strip);
+  // A copy keeps at least the first record: one that changed every record (only in `ext`) would be the same
+  // conversation read differently, which reconcile refuses ("copies hold the same conversation but share no record").
+  if (tag !== null && records.length > 0) cut = Math.max(cut, 1);
   const suffix = tag === null ? [] : records.slice(cut).map((record) => ({ ...record, ext: { ...record.ext, "x-copy": tag } }) as EntryRecord);
   const { hash: _h, integrity: _i, ...header } = base.header;
   const copy: Transcript = { header, records: [...records.slice(0, cut), ...suffix] };
@@ -113,5 +119,31 @@ describe("reconcile", () => {
   test("copies of different sessions are refused", () => {
     const one = { header: { type: "transcript", atxf: "0.1", id: "one", time: "2026-10-30T09:00:00Z", source: { agent: "pi" } }, records: [] } as Transcript;
     expect(() => reconcile([one, { ...one, header: { ...one.header, id: "two" } }])).toThrow("different sessions");
+  });
+});
+
+describe("copies read differently", () => {
+  const fixture = readFileSync(new URL("../../../fixtures/pi/session-every-field.jsonl", import.meta.url), "utf8");
+
+  test("a copy converted without carry holds the same conversation under other keys, and is refused", () => {
+    const local = pi.toAtxf(fixture);
+    const lossy = codex.toAtxf(codex.fromAtxf(local, { carry: false }));
+    expect(lossy.header.id).toBe(local.header.id);
+    expect(() => reconcile([local, lossy])).toThrow(/hold the same conversation but share no record/);
+    // Carried, the copy keeps the records it was made from, and reconciles.
+    expect(reconcile([local, codex.toAtxf(codex.fromAtxf(local))]).transcript.records.length).toBeGreaterThan(0);
+  });
+
+  test("copies forked before the first answer share no record either, but answer differently, and reconcile", () => {
+    const at = (s: number) => `2026-01-01T00:00:0${s}.000Z`;
+    const header = { type: "transcript", atxf: "0.1", id: "s", time: at(0), source: { agent: "test" } } as const;
+    const copy = (answer: string, s: number): Transcript => ({
+      header,
+      records: [
+        { type: "message", id: "u", parentId: null, time: at(s), role: "user", content: "hello" },
+        { type: "message", id: "a", parentId: "u", time: at(s + 1), role: "assistant", content: [{ type: "text", text: answer }] },
+      ] as EntryRecord[],
+    });
+    expect(reconcile([copy("hi from the studio", 1), copy("hi from the laptop", 3)]).transcript.records).toHaveLength(4);
   });
 });

@@ -295,6 +295,7 @@ Copies of one session diverge when it is continued in two places. Reconciling co
 - **Ids.** Of records sharing an id, the smallest key keeps it; the others become `id~<hex>`, the shortest prefix of their key's hex digest (at least 8 characters) that is free, and every reference follows. When copies hold one record under different ids, the smallest id is kept.
 - **Order.** Records are written referenced-first; among the records ready, earliest `time` first, then smallest key. The active leaf (§4) follows from that order, so copies holding the same records show the same place.
 - **Seals.** The copies' seals are dropped. When any copy declares integrity, the result is hashed and sealed.
+- **Copies read differently.** Two copies that share no record, yet give the same text for the first assistant message with text on their active paths, hold one conversation read in two ways: a conversion that kept less than the source (without `native` or a carried transcript) changes every record's key. Reconciling them MUST fail, since the union would hold the conversation twice. Copies forked before the first answer share no record either, but answer differently.
 
 Reconciling is commutative, associative and idempotent. Two copies are in sync when they hold the same set of keys. `@leostera/atxf/reconcile` implements this; `specs/reconcile.ts` models it.
 

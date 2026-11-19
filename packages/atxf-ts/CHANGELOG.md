@@ -12,6 +12,11 @@ All notable changes to `@leostera/atxf`. Versions are the package's own; every r
   `atxf linearize --from pi --to pi a.jsonl b.jsonl`. It works on all 2,614 local Pi sessions. In those that branch
   and never compacted, every message is in context afterwards (151 instead of 17 in one). Also in the Rust crate and
   CLI.
+- **`reconcile` refuses copies read differently** (SPEC §18). Two copies of a session share no record but start
+  with the same first answer when one was converted without carry: every record has a different key, and their
+  union held the whole conversation twice, so linearizing gave the next agent every prompt twice. Found by
+  `test/e2e/linearize.ts`. Copies forked before the first answer still reconcile. The CLI reports errors as
+  `atxf: <message>` instead of a stack trace, as the Rust one does.
 - **Fix (Pi):** an entry Pi appended after a carried annotation (a seal or leaf written as an `atxf.record` custom
   entry, e.g. in a reconciled tree) read as a new root. It now continues from where the annotation sits, as after
   Pi's own labels. Reading changed, so `PI_STREAM_STATE` is now `pi/session-jsonl stream 2`: states saved by 0.4.0
