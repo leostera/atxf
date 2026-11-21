@@ -1,6 +1,6 @@
 [package]
 name = "atxf"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "ATXF, the Agent Transcript Exchange Format: types, validation, integrity, lossless converters for coding-agent sessions, and reconciliation"
 license = "MIT"

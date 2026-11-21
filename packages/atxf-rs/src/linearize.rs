@@ -86,7 +86,7 @@ fn order(tree: &[&Map], children: &HashMap<Option<&str>, Vec<usize>>, position: 
             None => true,
         })
     };
-    let continues = |record: &Map| u8::from(!(record.parent_id().is_some_and(|p| position.contains_key(p)) && !starts_turn(record)));
+    let continues = |record: &Map| u8::from(!record.parent_id().is_some_and(|p| position.contains_key(p)) || starts_turn(record));
     // Another answer to the same prompt (a branch mid-turn) first, then the earliest piece, then file order.
     let compare = |a: &usize, b: &usize| {
         let (ra, rb) = (tree[*a], tree[*b]);

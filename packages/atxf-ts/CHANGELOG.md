@@ -3,7 +3,7 @@
 All notable changes to `@leostera/atxf`. Versions are the package's own; every release so far implements ATXF 0.1
 (`ATXF_VERSIONS`).
 
-## Unreleased
+## 0.5.0
 
 - **`linearize`** and **`atxf linearize`** (SPEC §18.1): every branch of a transcript on one path, turn by turn in
   the order they happened, so an agent continuing a reconciled session sees what every copy did, word for word. The
